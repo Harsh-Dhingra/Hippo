@@ -61,6 +61,13 @@ jobs:
           HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run pytest tests/test_roles.py -v --no-cov
 
+      # 10k random ACL matrices against an independent oracle. Must pass on any
+      # change touching retrieval, ACLs, scopes, or the filter function.
+      - name: permission property test
+        env:
+          HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: uv run pytest -m permission_property -v --no-cov
+
       - name: pytest
         env:
           HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres

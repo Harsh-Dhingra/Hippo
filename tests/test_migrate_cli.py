@@ -53,14 +53,27 @@ def test_status_after_up_shows_no_pending(capsys: pytest.CaptureFixture[str]) ->
     assert "pending: 0" in out
 
 
-def test_down_on_an_irreversible_migration_exits_nonzero(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_down_reverts_the_newest_migration(capsys: pytest.CaptureFixture[str]) -> None:
     main(["up"])
     capsys.readouterr()
 
-    assert main(["down"]) == 1
+    assert main(["down"]) == 0
+    assert f"reverted 1 migration(s): [{LATEST_VERSION}]" in capsys.readouterr().out
+
+
+def test_down_past_an_irreversible_migration_reverts_nothing(
+    db_dsn: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """002_roles has no down migration on purpose. Asking to go past it must
+    fail whole, not leave the schema half way back."""
+    main(["up"])
+    capsys.readouterr()
+
+    assert main(["down", "--steps", "99"]) == 1
     assert "not reversible" in capsys.readouterr().err
+
+    with connect(db_dsn) as conn:
+        assert sorted(applied(conn)) == [m.version for m in REPO_MIGRATIONS]
 
 
 def test_unknown_command_is_rejected() -> None:

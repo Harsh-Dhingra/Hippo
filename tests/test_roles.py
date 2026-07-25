@@ -328,6 +328,34 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
     assert roles_migration.reversible is False
 
 
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        ("hippo_agent", ["visible_chunks"]),
+        ("hippo_sync", []),
+        ("hippo_resolver", []),
+    ],
+)
+def test_function_surface_is_exactly_what_was_granted(
+    migrated: Connection, role: str, expected: list[str]
+) -> None:
+    """The agent's entire read path is one function. Extension-owned functions
+    are excluded: pgvector and pgcrypto expose pure computation with no data
+    access, and they are PUBLIC-executable by design."""
+    with migrated.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT p.proname "
+            "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = 'public' "
+            "  AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+            "                   WHERE d.objid = p.oid AND d.deptype = 'e') "
+            "  AND has_function_privilege(%s, p.oid, 'EXECUTE') "
+            "ORDER BY p.proname",
+            (role,),
+        )
+        assert [row[0] for row in cur.fetchall()] == expected
+
+
 def test_owner_retains_full_access(migrated: Connection) -> None:
     """Sanity check on the harness itself: the assertions above must be failing
     because of grants, not because the queries are broken."""
