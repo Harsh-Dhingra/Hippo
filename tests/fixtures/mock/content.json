@@ -1,0 +1,46 @@
+[
+  {
+    "source_type": "mock.channel",
+    "source_id": "C-GENERAL",
+    "payload": { "id": "C-GENERAL", "name": "general", "is_private": false }
+  },
+  {
+    "source_type": "mock.channel",
+    "source_id": "C-DEALS",
+    "payload": { "id": "C-DEALS", "name": "deals", "is_private": true }
+  },
+  {
+    "source_type": "mock.message",
+    "source_id": "M-1",
+    "container": { "source_type": "mock.channel", "source_id": "C-GENERAL" },
+    "payload": {
+      "ts": "1750000000.000100",
+      "channel": "C-GENERAL",
+      "user": "U-ALICE",
+      "text": "the acme renewal is blocked on pricing approval"
+    }
+  },
+  {
+    "source_type": "mock.message",
+    "source_id": "M-2",
+    "container": { "source_type": "mock.channel", "source_id": "C-GENERAL" },
+    "payload": {
+      "ts": "1750000100.000200",
+      "channel": "C-GENERAL",
+      "user": "U-BOB",
+      "text": "JIRA-123 tracks it",
+      "reactions": [{ "name": "eyes", "count": 2 }]
+    }
+  },
+  {
+    "source_type": "mock.message",
+    "source_id": "M-3",
+    "container": { "source_type": "mock.channel", "source_id": "C-DEALS" },
+    "payload": {
+      "ts": "1750000200.000300",
+      "channel": "C-DEALS",
+      "user": "U-BOB",
+      "text": "acme wants 30 percent off, do not repeat this outside deals"
+    }
+  }
+]

@@ -65,6 +65,9 @@ addopts = [
     "--strict-markers",
     "--cov=core",
     "--cov=api",
+    "--cov=sync",
+    "--cov=resolver",
+    "--cov=agent",
     "--cov-report=term-missing",
     # Ratchet only upwards (CLAUDE.md, Quality gates).
     "--cov-fail-under=98",

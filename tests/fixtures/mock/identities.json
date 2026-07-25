@@ -1,0 +1,48 @@
+[
+  {
+    "kind": "group",
+    "source_id": "G-ENG",
+    "display_name": "Engineering",
+    "payload": { "id": "G-ENG", "name": "Engineering", "is_usergroup": true }
+  },
+  {
+    "kind": "group",
+    "source_id": "G-LEADS",
+    "display_name": "Leads",
+    "payload": { "id": "G-LEADS", "name": "Leads", "is_usergroup": true }
+  },
+  {
+    "kind": "user",
+    "source_id": "U-ALICE",
+    "email": "alice@example.com",
+    "display_name": "Alice",
+    "member_of": ["G-ENG"],
+    "payload": {
+      "id": "U-ALICE",
+      "profile": { "email": "alice@example.com", "real_name": "Alice" },
+      "tz": "Europe/Dublin",
+      "unmodelled_future_field": "kept verbatim"
+    }
+  },
+  {
+    "kind": "user",
+    "source_id": "U-BOB",
+    "email": "bob@example.com",
+    "display_name": "Bob",
+    "member_of": ["G-LEADS"],
+    "payload": {
+      "id": "U-BOB",
+      "profile": { "email": "bob@example.com", "real_name": "Bob" }
+    }
+  },
+  {
+    "kind": "user",
+    "source_id": "U-CAROL",
+    "email": "carol@example.com",
+    "display_name": "Carol",
+    "payload": {
+      "id": "U-CAROL",
+      "profile": { "email": "carol@example.com", "real_name": "Carol" }
+    }
+  }
+]

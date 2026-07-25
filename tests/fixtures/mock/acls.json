@@ -1,0 +1,17 @@
+[
+  {
+    "target": { "source_type": "mock.channel", "source_id": "C-GENERAL" },
+    "principal_source_id": "G-ENG",
+    "access": "read"
+  },
+  {
+    "target": { "source_type": "mock.channel", "source_id": "C-GENERAL" },
+    "principal_source_id": "U-CAROL",
+    "access": "read"
+  },
+  {
+    "target": { "source_type": "mock.channel", "source_id": "C-DEALS" },
+    "principal_source_id": "U-BOB",
+    "access": "read"
+  }
+]
