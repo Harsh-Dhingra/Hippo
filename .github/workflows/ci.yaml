@@ -68,6 +68,14 @@ jobs:
           HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run pytest -m permission_property -v --no-cov
 
+      # Retrieval quality as floors, and a permission red team that probes the
+      # filter with the forbidden text itself. Its own gate so a leak reads
+      # unambiguously in the checks list rather than as one line in a long run.
+      - name: retrieval eval + permission red team
+        env:
+          HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: uv run pytest -m eval -v --no-cov
+
       - name: pytest
         env:
           HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
