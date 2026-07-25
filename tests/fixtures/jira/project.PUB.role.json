@@ -1,0 +1,4 @@
+{
+  "Developers": "https://example.atlassian.net/rest/api/3/project/PUB/role/10001",
+  "Users": "https://example.atlassian.net/rest/api/3/project/PUB/role/10002"
+}

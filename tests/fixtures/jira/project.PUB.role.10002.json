@@ -1,0 +1,16 @@
+{
+  "id": 10002,
+  "name": "Users",
+  "actors": [
+    {
+      "id": 2,
+      "type": "atlassian-group-role-actor",
+      "actorGroup": { "groupId": "g-dev", "name": "jira-developers" }
+    },
+    {
+      "id": 3,
+      "type": "atlassian-user-role-actor",
+      "actorUser": { "accountId": "u-carol" }
+    }
+  ]
+}

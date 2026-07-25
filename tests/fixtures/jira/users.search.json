@@ -1,0 +1,37 @@
+[
+  {
+    "accountId": "u-alice",
+    "accountType": "atlassian",
+    "active": true,
+    "displayName": "Alice Okafor",
+    "emailAddress": "alice@example.com"
+  },
+  {
+    "accountId": "u-bob",
+    "accountType": "atlassian",
+    "active": true,
+    "displayName": "Bob Ferreira",
+    "emailAddress": "bob@example.com",
+    "an_unmodelled_field": "kept verbatim"
+  },
+  {
+    "accountId": "u-carol",
+    "accountType": "atlassian",
+    "active": true,
+    "displayName": "Carol Nkemdirim",
+    "emailAddress": "carol@example.com"
+  },
+  {
+    "accountId": "u-departed",
+    "accountType": "atlassian",
+    "active": false,
+    "displayName": "Departed Person",
+    "emailAddress": "gone@example.com"
+  },
+  {
+    "accountId": "app-automation",
+    "accountType": "app",
+    "active": true,
+    "displayName": "Automation for Jira"
+  }
+]

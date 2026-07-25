@@ -1,0 +1,6 @@
+{
+  "values": [
+    { "id": "10000", "key": "ACME", "name": "Acme Renewal", "projectTypeKey": "software" },
+    { "id": "10001", "key": "PUB", "name": "Public Docs", "projectTypeKey": "business" }
+  ]
+}

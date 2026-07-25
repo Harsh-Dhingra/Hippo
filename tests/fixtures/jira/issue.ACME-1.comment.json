@@ -1,0 +1,14 @@
+{
+  "comments": [
+    {
+      "id": "10100",
+      "author": { "accountId": "u-bob", "displayName": "Bob Ferreira" },
+      "body": "legal will not sign until the liability cap is agreed"
+    },
+    {
+      "id": "10101",
+      "author": { "accountId": "u-alice", "displayName": "Alice Okafor" },
+      "body": "engineering work is already finished"
+    }
+  ]
+}

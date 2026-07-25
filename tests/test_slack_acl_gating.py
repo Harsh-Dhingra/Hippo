@@ -24,12 +24,11 @@ import pytest
 from core.db import Connection
 from sync.connectors.slack import FixtureTransport, SlackConnector
 from sync.runtime import SyncRuntime, project_acl_grants
+from tests.resolver_stub import principal, resolve_like_the_resolver, visible_text
 
 pytestmark = pytest.mark.requires_db
 
 SLACK_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "slack"
-ORG_SCOPE = UUID("00000000-0000-0000-0000-000000000001")
-
 GENERAL_TEXT = "is anything blocking the Acme renewal?"
 THREAD_TEXT = "legal review is the blocker, not engineering"
 DEALS_TEXT = "Acme is asking for 30 percent off to renew, do not repeat outside this channel"
@@ -43,62 +42,6 @@ def connector_id(migrated: Connection) -> UUID:
         (new_id,),
     )
     return new_id
-
-
-def resolve_like_the_resolver(conn: Connection, connector_id: UUID) -> None:
-    """Stand-in for P1-RES-1.
-
-    One entity per raw record, linked through entity_sources, which is the
-    minimum the projection needs. Everything the real resolver adds on top of
-    that (identity merging, summaries) is irrelevant to whether a grant lands
-    on the right entity.
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, source_type, source_id, payload FROM raw_records WHERE connector_id = %s",
-            (connector_id,),
-        )
-        rows = cur.fetchall()
-
-    for raw_id, source_type, source_id, payload in rows:
-        entity_type = str(source_type).rsplit(".", 1)[-1]
-        title = payload.get("name") or payload.get("text") or str(source_id)
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO entities (entity_type, title) VALUES (%s, %s) RETURNING id",
-                (entity_type, title[:200]),
-            )
-            row = cur.fetchone()
-            assert row is not None
-            entity_id = row[0]
-            cur.execute(
-                "INSERT INTO entity_sources (entity_id, raw_record_id) VALUES (%s, %s)",
-                (entity_id, raw_id),
-            )
-            # A chunk per message, so the permission filter has something to
-            # return. The real chunking policy is P1-RES-3's problem.
-            if str(source_type).endswith("message"):
-                cur.execute(
-                    "INSERT INTO chunks (entity_id, scope_id, content) VALUES (%s, %s, %s)",
-                    (entity_id, ORG_SCOPE, payload.get("text", "")),
-                )
-
-
-def principal(conn: Connection, connector_id: UUID, source_id: str) -> UUID:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id FROM principals WHERE connector_id = %s AND source_id = %s",
-            (connector_id, source_id),
-        )
-        row = cur.fetchone()
-    assert row is not None, f"no principal for {source_id}"
-    return UUID(str(row[0]))
-
-
-def visible_text(conn: Connection, principal_id: UUID) -> set[str]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT content FROM visible_chunks(%s, NULL, NULL, 1000)", (principal_id,))
-        return {str(row[0]) for row in cur.fetchall()}
 
 
 @pytest.fixture
@@ -251,15 +194,31 @@ def test_projection_leaves_other_connectors_grants_alone(
 ) -> None:
     """One connector rebuilding its grants must not delete another's."""
     other = uuid4()
-    alice = principal(synced, connector_id, "U-ALICE")
     with synced.cursor() as cur:
-        cur.execute("SELECT id FROM entities LIMIT 1")
+        cur.execute(
+            "INSERT INTO connectors (id, kind, display_name) VALUES (%s, 'jira', 'Jira')",
+            (other,),
+        )
+        # A second connector brings its own principals. acl_grants is keyed on
+        # (entity, principal, access), so this is also the only shape a
+        # cross-connector grant can take: two connectors granting the same
+        # principal on the same entity would collide, which cannot happen in v0
+        # because an entity's raw records come from a single connector.
+        cur.execute(
+            "INSERT INTO principals (kind, connector_id, source_id) "
+            "VALUES ('user', %s, 'jira-user') RETURNING id",
+            (other,),
+        )
         row = cur.fetchone()
         assert row is not None
+        their_principal = row[0]
+        cur.execute("SELECT id FROM entities LIMIT 1")
+        entity = cur.fetchone()
+        assert entity is not None
         cur.execute(
             "INSERT INTO acl_grants (entity_id, principal_id, access, source) "
             "VALUES (%s, %s, 'read', %s)",
-            (row[0], alice, str(other)),
+            (entity[0], their_principal, str(other)),
         )
 
     project_acl_grants(synced, connector_id)

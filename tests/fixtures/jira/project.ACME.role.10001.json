@@ -1,0 +1,11 @@
+{
+  "id": 10001,
+  "name": "Developers",
+  "actors": [
+    {
+      "id": 1,
+      "type": "atlassian-group-role-actor",
+      "actorGroup": { "groupId": "g-dev", "name": "jira-developers" }
+    }
+  ]
+}

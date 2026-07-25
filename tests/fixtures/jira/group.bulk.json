@@ -1,0 +1,6 @@
+{
+  "values": [
+    { "groupId": "g-dev", "name": "jira-developers" },
+    { "groupId": "g-support", "name": "jira-support" }
+  ]
+}
