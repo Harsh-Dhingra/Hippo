@@ -3,7 +3,11 @@
 import pytest
 
 from core.db import connect
-from core.migrate import applied, main
+from core.migrate import applied, discover, main
+
+# Derived, not hardcoded, so adding a migration does not break the CLI tests.
+REPO_MIGRATIONS = discover()
+LATEST_VERSION = max(m.version for m in REPO_MIGRATIONS)
 
 pytestmark = pytest.mark.requires_db
 
@@ -25,10 +29,10 @@ def test_status_on_an_empty_database(capsys: pytest.CaptureFixture[str]) -> None
 
 def test_up_applies_the_repo_migrations(db_dsn: str, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["up"]) == 0
-    assert "applied 1 migration(s)" in capsys.readouterr().out
+    assert f"applied {len(REPO_MIGRATIONS)} migration(s)" in capsys.readouterr().out
 
     with connect(db_dsn) as conn:
-        assert 1 in applied(conn)
+        assert sorted(applied(conn)) == [m.version for m in REPO_MIGRATIONS]
 
 
 def test_up_is_idempotent(capsys: pytest.CaptureFixture[str]) -> None:
@@ -45,7 +49,7 @@ def test_status_after_up_shows_no_pending(capsys: pytest.CaptureFixture[str]) ->
 
     assert main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "current version: 001" in out
+    assert f"current version: {LATEST_VERSION:03d}" in out
     assert "pending: 0" in out
 
 

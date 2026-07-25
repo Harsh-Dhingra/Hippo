@@ -1,8 +1,8 @@
 # Every gate here blocks merge. If one fails, fix the code, not the gate
 # (CLAUDE.md, Quality gates).
 #
-# The role-grant leak test and the permission property test join this file with
-# P1-CORE-2 and P1-CORE-3, when the roles and the filter function exist.
+# The permission property test (10k random ACL matrices) joins this file with
+# P1-CORE-3, when the filter function exists.
 
 name: CI
 
@@ -53,6 +53,13 @@ jobs:
 
       - name: mypy --strict
         run: uv run mypy
+
+      # Its own named gate, run before the rest so it fails fast and reads
+      # unambiguously in the checks list. It also runs inside the full suite.
+      - name: role-grant leak test
+        env:
+          HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: uv run pytest tests/test_roles.py -v --no-cov
 
       - name: pytest
         env:

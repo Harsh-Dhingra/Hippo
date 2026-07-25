@@ -59,6 +59,16 @@ def db_conn(db_dsn: str) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
 
 
 @pytest.fixture
+def migrated(db_dsn: str) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
+    """A database with every repo migration applied."""
+    from core.migrate import upgrade
+
+    with psycopg.connect(db_dsn, autocommit=True) as conn:
+        upgrade(conn)
+        yield conn
+
+
+@pytest.fixture
 def settings(db_dsn: str) -> Settings:
     """Settings wired to the throwaway database, migrations applied on startup."""
     return Settings(database_url=db_dsn, log_level="WARNING", service_name="hippo-test")
