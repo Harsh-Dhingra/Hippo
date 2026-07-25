@@ -27,7 +27,7 @@
         "type": "message",
         "ts": "1750000090.000100",
         "user": "U-BOB",
-        "text": "I will summarise on Friday"
+        "text": "<@U-ALICE> I will summarise on Friday, see also <@U-CAROL>"
       }
     ],
     "response_metadata": { "next_cursor": "" }

@@ -4,28 +4,54 @@
       "id": "1",
       "key": "ACME-1",
       "fields": {
-        "project": { "key": "ACME", "name": "Acme Renewal" },
+        "project": {
+          "key": "ACME",
+          "name": "Acme Renewal"
+        },
         "summary": "Acme renewal blocked on legal review",
-        "status": { "name": "In Progress" },
-        "assignee": { "accountId": "u-alice" }
+        "status": {
+          "name": "In Progress"
+        },
+        "assignee": {
+          "accountId": "u-alice"
+        },
+        "reporter": {
+          "accountId": "u-bob"
+        }
       }
     },
     {
       "id": "2",
       "key": "ACME-2",
       "fields": {
-        "project": { "key": "ACME", "name": "Acme Renewal" },
+        "project": {
+          "key": "ACME",
+          "name": "Acme Renewal"
+        },
         "summary": "Draft the 18 percent discount floor",
-        "status": { "name": "To Do" }
+        "status": {
+          "name": "To Do"
+        },
+        "reporter": {
+          "accountId": "u-alice"
+        }
       }
     },
     {
       "id": "3",
       "key": "PUB-1",
       "fields": {
-        "project": { "key": "PUB", "name": "Public Docs" },
+        "project": {
+          "key": "PUB",
+          "name": "Public Docs"
+        },
         "summary": "Publish the integration guide",
-        "status": { "name": "Done" }
+        "status": {
+          "name": "Done"
+        },
+        "reporter": {
+          "accountId": "u-carol"
+        }
       }
     }
   ]
