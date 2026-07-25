@@ -1,0 +1,82 @@
+# Every gate here blocks merge. If one fails, fix the code, not the gate
+# (CLAUDE.md, Quality gates).
+#
+# The role-grant leak test and the permission property test join this file with
+# P1-CORE-2 and P1-CORE-3, when the roles and the filter function exist.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: lint, types, tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      - name: mypy --strict
+        run: uv run mypy
+
+      - name: pytest
+        env:
+          HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: uv run pytest
+
+  compose-smoke:
+    name: docker compose up
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose up
+        run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 300
+
+      - name: healthcheck is green
+        run: |
+          curl -fsS http://localhost:8000/healthz | tee /dev/stderr | grep -q '"status":"ok"'
+
+      - name: logs
+        if: failure()
+        run: docker compose -f deploy/compose.yaml logs --no-color
+
+      - name: tear down
+        if: always()
+        run: docker compose -f deploy/compose.yaml down -v
