@@ -24,6 +24,11 @@ COPY sync ./sync
 COPY resolver ./resolver
 COPY agent ./agent
 
+# The demo world. A few kilobytes of JSON so `docker compose up` can be tried
+# before anyone connects a Slack workspace; see deploy/demo/__init__.py.
+COPY deploy/demo ./deploy/demo
+COPY tests/fixtures ./tests/fixtures
+
 RUN uv sync --frozen --no-dev
 
 # Runs unprivileged. Nothing here needs root.

@@ -389,7 +389,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
         ("hippo_resolver", []),
         # The API serves the trace view and the approval buttons. It never
         # calls visible_chunks(): a query runs as hippo_agent instead.
-        ("hippo_api", ["my_trace", "my_traces"]),
+        ("hippo_api", ["my_principals", "my_trace", "my_traces"]),
     ],
 )
 def test_function_surface_is_exactly_what_was_granted(

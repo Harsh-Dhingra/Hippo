@@ -73,6 +73,34 @@ jobs:
           HIPPO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run pytest
 
+  ui:
+    name: ui lint, types, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: eslint
+        run: npm run lint
+
+      - name: tsc --noEmit
+        run: npm run typecheck
+
+      - name: next build
+        run: npm run build
+
   compose-smoke:
     name: docker compose up
     runs-on: ubuntu-latest
@@ -86,6 +114,19 @@ jobs:
       - name: healthcheck is green
         run: |
           curl -fsS http://localhost:8000/healthz | tee /dev/stderr | grep -q '"status":"ok"'
+
+      - name: the UI is served
+        run: |
+          curl -fsS http://localhost:3000/login | grep -q 'Sign in'
+
+      # The whole of ARCHITECTURE section 12, driven the way a mouse would:
+      # sign in, approve a proposal, execute it, roll it back, read the trace.
+      - name: the demo is drivable
+        run: |
+          docker compose -f deploy/compose.yaml exec -T app \
+            sh -c 'python -m deploy.demo.seed "$HIPPO_DATABASE_URL"'
+          node ui/scripts/smoke.mjs http://localhost:3000 \
+            alice@example.com hippo-demo-password
 
       - name: logs
         if: failure()

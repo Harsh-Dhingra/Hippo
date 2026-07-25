@@ -770,3 +770,60 @@ def _jira_marker(conn: Connection, email: str, question: str) -> int:
         if hit.source_type == "jira.issue":
             return index
     raise AssertionError("no jira issue retrieved")
+
+
+def test_your_actions_are_yours_through_any_account(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    """Migration 012, over HTTP. The agent records an action against whichever
+    principal asked; a login resolves to whichever of that person's principals
+    sorts first. Before this, a person's own proposal was invisible to them."""
+    from resolver.resolution import link_principal_identities
+
+    proposal = propose(client, world, model)["proposal"]
+    with world.cursor() as cur:
+        cur.execute("SELECT requested_by FROM actions WHERE id = %s", (proposal["id"],))
+        recorded = (cur.fetchone() or (None,))[0]
+    link_principal_identities(world)
+    # Point the login at a different one of Alice's accounts than the agent used.
+    with world.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET principal_id = ("
+            "  SELECT id FROM principals WHERE kind = 'user' "
+            "  AND lower(btrim(email)) = %s AND id <> %s LIMIT 1"
+            ") WHERE email = %s",
+            (ALICE_EMAIL, recorded, ALICE_EMAIL),
+        )
+    world.commit()
+
+    listed = client.get("/api/v1/actions", headers=headers(client, ALICE_EMAIL))
+
+    assert [action["id"] for action in listed.json()] == [proposal["id"]]
+
+
+def test_and_can_still_be_approved(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    from resolver.resolution import link_principal_identities
+
+    proposal = propose(client, world, model)["proposal"]
+    with world.cursor() as cur:
+        cur.execute("SELECT requested_by FROM actions WHERE id = %s", (proposal["id"],))
+        recorded = (cur.fetchone() or (None,))[0]
+    link_principal_identities(world)
+    with world.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET principal_id = ("
+            "  SELECT id FROM principals WHERE kind = 'user' "
+            "  AND lower(btrim(email)) = %s AND id <> %s LIMIT 1"
+            ") WHERE email = %s",
+            (ALICE_EMAIL, recorded, ALICE_EMAIL),
+        )
+    world.commit()
+
+    response = client.post(
+        f"/api/v1/actions/{proposal['id']}/approve", headers=headers(client, ALICE_EMAIL)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"

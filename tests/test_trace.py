@@ -676,3 +676,64 @@ def _marker(conn: Connection, principal_id: UUID, question: str, source_type: st
         if hit.source_type == source_type:
             return index
     raise AssertionError(f"no {source_type} retrieved")
+
+
+# ---------------------------------------------------------------------------
+# One human, several accounts. Migration 012, found by driving the demo.
+# ---------------------------------------------------------------------------
+
+
+def test_a_trace_is_found_through_any_of_your_accounts(
+    migrated: Connection, workspace: tuple[UUID, UUID]
+) -> None:
+    """The bug this fixes: a login resolves to whichever principal sorts first,
+    and the agent records against whichever one asked. Those are often not the
+    same account, and the trace list was empty as a result."""
+    slack_id, jira_id = workspace
+    from resolver.resolution import link_principal_identities
+
+    link_principal_identities(migrated)
+    slack_alice = principal(migrated, slack_id, "U-ALICE")
+    jira_alice = principal(migrated, jira_id, "u-alice")
+    assert slack_alice != jira_alice
+
+    answer = build_agent(migrated, ScriptedModel()).answer(migrated, slack_alice, QUESTION, k=40)
+    assert answer.trace_id is not None
+
+    assert load_trace(migrated, jira_alice, answer.trace_id) is not None
+    assert [t["id"] for t in list_traces(migrated, jira_alice)] == [answer.trace_id]
+
+
+def test_ownership_does_not_walk_into_groups(
+    migrated: Connection, workspace: tuple[UUID, UUID]
+) -> None:
+    """A grant to a channel reaches every member; a question does not. Widening
+    ownership the way permissions widen would show one person's questions to
+    their whole team, which is a different feature and not this one."""
+    slack_id, _ = workspace
+    alice = principal(migrated, slack_id, "U-ALICE")
+    answer = build_agent(migrated, ScriptedModel()).answer(migrated, alice, QUESTION, k=40)
+    assert answer.trace_id is not None
+
+    with migrated.cursor() as cur:
+        cur.execute(
+            "SELECT group_id FROM principal_memberships WHERE member_id = %s LIMIT 1", (alice,)
+        )
+        row = cur.fetchone()
+    assert row is not None, "alice is in a group, or this test proves nothing"
+
+    assert load_trace(migrated, UUID(str(row[0])), answer.trace_id) is None
+
+
+def test_an_unlinked_account_still_sees_only_its_own(
+    migrated: Connection, workspace: tuple[UUID, UUID]
+) -> None:
+    """A NULL identity_id must not behave like a value shared by everyone who
+    has not been linked yet."""
+    slack_id, _ = workspace
+    alice = principal(migrated, slack_id, "U-ALICE")
+    carol = principal(migrated, slack_id, "U-CAROL")
+    answer = build_agent(migrated, ScriptedModel()).answer(migrated, alice, QUESTION, k=40)
+    assert answer.trace_id is not None
+
+    assert load_trace(migrated, carol, answer.trace_id) is None

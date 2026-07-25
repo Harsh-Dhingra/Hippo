@@ -76,6 +76,13 @@ class Action(BaseModel):
     created_at: Any
 
 
+# One human, several accounts. The agent records an action against whichever
+# principal asked; a login resolves to whichever of that person's principals
+# sorts first, and those are often not the same one. Scoping by principal alone
+# hides a person's own actions from them — which is exactly what the demo did
+# before migration 012.
+_MINE = "SELECT principal_id FROM my_principals(%s)"
+
 _SELECT = (
     "SELECT a.id, a.action_type, a.status, a.risk_class, a.payload, a.target_entity, "
     "       e.title, a.connector_id, c.kind, a.requested_by, a.approved_by, a.declined_by, "
@@ -116,7 +123,7 @@ def list_actions(
     are: an action names a ticket, and a list of other people's actions is a
     list of things they can see.
     """
-    sql = _SELECT + "WHERE a.requested_by = %s "
+    sql = _SELECT + f"WHERE a.requested_by IN ({_MINE}) "
     params: list[Any] = [principal_id]
     if status is not None:
         sql += "AND a.status = %s "
@@ -131,7 +138,10 @@ def list_actions(
 
 def get_action(conn: Connection, principal_id: UUID, action_id: UUID) -> Action:
     with conn.cursor() as cur:
-        cur.execute(_SELECT + "WHERE a.id = %s AND a.requested_by = %s", (action_id, principal_id))
+        cur.execute(
+            _SELECT + f"WHERE a.id = %s AND a.requested_by IN ({_MINE})",
+            (action_id, principal_id),
+        )
         row = cur.fetchone()
     if row is None:
         raise ActionNotFoundError(str(action_id))
@@ -148,7 +158,7 @@ def approve(conn: Connection, principal_id: UUID, action_id: UUID) -> Action:
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE actions SET status = 'approved', approved_by = %s "
-            "WHERE id = %s AND requested_by = %s AND status = 'pending'",
+            f"WHERE id = %s AND requested_by IN ({_MINE}) AND status = 'pending'",
             (principal_id, action_id, principal_id),
         )
         changed = cur.rowcount
@@ -169,7 +179,7 @@ def decline(conn: Connection, principal_id: UUID, action_id: UUID) -> Action:
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE actions SET status = 'declined', declined_by = %s "
-            "WHERE id = %s AND requested_by = %s AND status = 'pending'",
+            f"WHERE id = %s AND requested_by IN ({_MINE}) AND status = 'pending'",
             (principal_id, action_id, principal_id),
         )
         changed = cur.rowcount

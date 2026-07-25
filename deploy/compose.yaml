@@ -1,5 +1,11 @@
-# Two containers: the app and Postgres. That is the whole deployment.
-# `docker compose -f deploy/compose.yaml up` and wait for both healthchecks.
+# Three containers: the API, the web UI, and Postgres. That is the whole
+# deployment. `docker compose -f deploy/compose.yaml up` and wait for the
+# healthchecks.
+#
+# Only the UI is meant to be reachable from a browser. The API port is
+# published too, because the OpenAPI document and /metrics are useful and
+# because a self-hoster owns their own network — but nothing in the browser
+# ever calls it directly.
 
 name: hippo
 
@@ -53,6 +59,32 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
+
+  ui:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.ui
+    restart: unless-stopped
+    environment:
+      # Container-to-container, so the token never crosses a network a browser
+      # can see.
+      HIPPO_API_URL: http://app:8000
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${HIPPO_UI_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          fetch("http://127.0.0.1:3000/login").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
 
 volumes:
   pgdata:
