@@ -1,0 +1,51 @@
+{
+  "": {
+    "ok": true,
+    "members": [
+      {
+        "id": "U-ALICE",
+        "name": "alice",
+        "deleted": false,
+        "is_bot": false,
+        "profile": { "email": "alice@example.com", "real_name": "Alice Okafor" },
+        "tz": "Europe/Dublin"
+      },
+      {
+        "id": "U-BOB",
+        "name": "bob",
+        "deleted": false,
+        "is_bot": false,
+        "profile": { "email": "bob@example.com", "real_name": "Bob Ferreira" }
+      }
+    ],
+    "response_metadata": { "next_cursor": "users-page-2" }
+  },
+  "users-page-2": {
+    "ok": true,
+    "members": [
+      {
+        "id": "U-CAROL",
+        "name": "carol",
+        "deleted": false,
+        "is_bot": false,
+        "profile": { "email": "carol@example.com", "real_name": "Carol Nkemdirim" },
+        "an_unmodelled_field": "stored verbatim anyway"
+      },
+      {
+        "id": "U-GONE",
+        "name": "departed",
+        "deleted": true,
+        "is_bot": false,
+        "profile": { "email": "gone@example.com", "real_name": "Departed Person" }
+      },
+      {
+        "id": "B-HIPPO",
+        "name": "hippobot",
+        "deleted": false,
+        "is_bot": true,
+        "profile": { "real_name": "Hippo Bot" }
+      }
+    ],
+    "response_metadata": { "next_cursor": "" }
+  }
+}

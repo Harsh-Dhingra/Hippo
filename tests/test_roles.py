@@ -41,6 +41,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "entities": READ,
         "entity_sources": READ,
         "jobs": WRITE,
+        "acl_source_grants": WRITE,
         "edges": NONE,
         "chunks": NONE,
         "memory_scopes": NONE,
@@ -58,6 +59,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "chunks": WRITE,
         "memory_scopes": READ,
         "jobs": WRITE,
+        "acl_source_grants": READ,
         "acl_grants": NONE,
         "sync_state": NONE,
         "actions": NONE,
@@ -68,6 +70,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "actions": frozenset({"INSERT"}),
         # The agent proposes into actions. It does not schedule work.
         "jobs": NONE,
+        "acl_source_grants": NONE,
         "chunks": NONE,
         "raw_records": NONE,
         "entities": NONE,
@@ -336,7 +339,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
     ("role", "expected"),
     [
         ("hippo_agent", ["visible_chunks"]),
-        ("hippo_sync", []),
+        ("hippo_sync", ["project_acl_grants"]),
         ("hippo_resolver", []),
     ],
 )

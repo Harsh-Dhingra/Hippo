@@ -1,0 +1,35 @@
+{
+  "": {
+    "ok": true,
+    "messages": [
+      {
+        "type": "message",
+        "ts": "1750000000.000100",
+        "user": "U-ALICE",
+        "text": "is anything blocking the Acme renewal?",
+        "thread_ts": "1750000000.000100",
+        "reply_count": 2
+      },
+      {
+        "type": "message",
+        "ts": "1750000050.000100",
+        "user": "U-CAROL",
+        "text": "JIRA-123 tracks the integration work",
+        "reactions": [{ "name": "eyes", "count": 2 }]
+      }
+    ],
+    "response_metadata": { "next_cursor": "general-page-2" }
+  },
+  "general-page-2": {
+    "ok": true,
+    "messages": [
+      {
+        "type": "message",
+        "ts": "1750000090.000100",
+        "user": "U-BOB",
+        "text": "I will summarise on Friday"
+      }
+    ],
+    "response_metadata": { "next_cursor": "" }
+  }
+}

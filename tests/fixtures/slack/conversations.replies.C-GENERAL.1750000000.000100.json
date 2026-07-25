@@ -1,0 +1,30 @@
+{
+  "": {
+    "ok": true,
+    "messages": [
+      {
+        "type": "message",
+        "ts": "1750000000.000100",
+        "user": "U-ALICE",
+        "text": "is anything blocking the Acme renewal?",
+        "thread_ts": "1750000000.000100",
+        "reply_count": 2
+      },
+      {
+        "type": "message",
+        "ts": "1750000010.000100",
+        "user": "U-BOB",
+        "text": "legal review is the blocker, not engineering",
+        "thread_ts": "1750000000.000100"
+      },
+      {
+        "type": "message",
+        "ts": "1750000020.000100",
+        "user": "U-CAROL",
+        "text": "agreed, engineering is done",
+        "thread_ts": "1750000000.000100"
+      }
+    ],
+    "response_metadata": { "next_cursor": "" }
+  }
+}

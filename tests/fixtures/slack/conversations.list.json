@@ -1,0 +1,22 @@
+{
+  "": {
+    "ok": true,
+    "channels": [
+      {
+        "id": "C-GENERAL",
+        "name": "general",
+        "is_private": false,
+        "is_archived": false,
+        "topic": { "value": "company wide" }
+      },
+      {
+        "id": "C-DEALS",
+        "name": "deals-acme",
+        "is_private": true,
+        "is_archived": false,
+        "topic": { "value": "acme renewal, restricted" }
+      }
+    ],
+    "response_metadata": { "next_cursor": "" }
+  }
+}

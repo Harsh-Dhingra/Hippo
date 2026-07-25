@@ -1,0 +1,20 @@
+{
+  "": {
+    "ok": true,
+    "messages": [
+      {
+        "type": "message",
+        "ts": "1750000200.000100",
+        "user": "U-BOB",
+        "text": "Acme is asking for 30 percent off to renew, do not repeat outside this channel"
+      },
+      {
+        "type": "message",
+        "ts": "1750000260.000100",
+        "user": "U-ALICE",
+        "text": "our floor is 18 percent"
+      }
+    ],
+    "response_metadata": { "next_cursor": "" }
+  }
+}

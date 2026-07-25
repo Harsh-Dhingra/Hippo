@@ -37,6 +37,24 @@ Cursor = Mapping[str, Any]
 
 EMPTY_CURSOR: Cursor = {}
 
+# Key a stream sets on its final cursor to mean "this pass is complete".
+#
+# Two kinds of stream need to be told apart. A watermark stream resumes and
+# picks up what is new (Jira's updated-since). A listing stream pages through
+# everything the source has and, when it reaches the end, has nowhere further to
+# go: Slack has no incremental users.list. Its terminal cursor cannot mean
+# "resume here" and must not mean "read it all again", so it means finished, and
+# the runtime starts the next pass from an empty cursor.
+#
+# Resuming from a terminal cursor yields one empty final page, which is what
+# keeps the resume contract exact.
+DONE = "done"
+
+
+def is_terminal(cursor: Cursor) -> bool:
+    """True when this cursor marks a completed pass rather than a position."""
+    return bool(cursor.get(DONE))
+
 
 class SourceRef(BaseModel):
     """An object in the source system, in the source system's own terms."""
