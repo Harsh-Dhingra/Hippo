@@ -22,7 +22,7 @@ from core.migrate import upgrade
 
 pytestmark = pytest.mark.requires_db
 
-ROLES = ("hippo_sync", "hippo_resolver", "hippo_agent")
+ROLES = ("hippo_sync", "hippo_resolver", "hippo_agent", "hippo_api")
 
 READ = frozenset({"SELECT"})
 WRITE = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
@@ -52,6 +52,8 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         # go looking for content.
         "query_traces": NONE,
         "trace_retrievals": NONE,
+        "users": NONE,
+        "sessions": NONE,
     },
     "hippo_resolver": {
         "raw_records": READ,
@@ -72,6 +74,8 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "schema_migrations": NONE,
         "query_traces": NONE,
         "trace_retrievals": NONE,
+        "users": NONE,
+        "sessions": NONE,
     },
     "hippo_agent": {
         "actions": frozenset({"INSERT"}),
@@ -95,6 +99,37 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "memory_scopes": NONE,
         "memory_notes": NONE,
         "schema_migrations": NONE,
+        "users": NONE,
+        "sessions": NONE,
+    },
+    # Serves people: logins, approvals, and enough to render one. It reads no
+    # content — a query runs under SET LOCAL ROLE hippo_agent, so a prompt
+    # still reaches chunks only through visible_chunks().
+    "hippo_api": {
+        "users": WRITE,
+        "sessions": WRITE,
+        # Approve and decline. Not INSERT: a proposal comes from the agent, and
+        # an API that could mint its own would make the split decorative.
+        "actions": frozenset({"SELECT", "UPDATE"}),
+        "entities": READ,
+        "connectors": READ,
+        "principals": READ,
+        "chunks": NONE,
+        "raw_records": NONE,
+        "entity_sources": NONE,
+        "edges": NONE,
+        "acl_grants": NONE,
+        "acl_source_grants": NONE,
+        "principal_memberships": NONE,
+        "sync_state": NONE,
+        "memory_scopes": NONE,
+        "memory_notes": NONE,
+        "jobs": NONE,
+        "schema_migrations": NONE,
+        # Read through my_trace()/my_traces(), never a SELECT — the same shape
+        # the agent writes them with.
+        "query_traces": NONE,
+        "trace_retrievals": NONE,
     },
 }
 
@@ -352,6 +387,9 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
         ("hippo_agent", ["my_trace", "my_traces", "visible_chunks"]),
         ("hippo_sync", ["project_acl_grants"]),
         ("hippo_resolver", []),
+        # The API serves the trace view and the approval buttons. It never
+        # calls visible_chunks(): a query runs as hippo_agent instead.
+        ("hippo_api", ["my_trace", "my_traces"]),
     ],
 )
 def test_function_surface_is_exactly_what_was_granted(

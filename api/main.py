@@ -1,12 +1,15 @@
 """The API process.
 
-v0 surface is deliberately two endpoints: a healthcheck that `docker compose up`
-can gate on, and Prometheus metrics. Query, actions and trace endpoints arrive
-with P1-SRF-1.
+Two operational endpoints — a healthcheck `docker compose up` can gate on, and
+Prometheus metrics — plus the v1 surface in api/routes.py.
+
+The agent is built on first use rather than at startup. Its connector directory
+needs a database, and building the app must not require one: an unreachable
+database is something /healthz reports, not something that stops the process.
 """
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager
 from typing import Literal
 
 from fastapi import FastAPI, Request, Response
@@ -14,10 +17,16 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 from pydantic import BaseModel, Field
 
+from agent.links import load_directory
+from agent.loop import Agent
+from agent.policy import load_policy
+from agent.providers import build_provider
+from api.routes import build_router
 from core.config import Settings, get_settings
-from core.db import Database, connect
+from core.db import Connection, Database, connect
 from core.logging import configure_logging
 from core.migrate import MigrationError, status, upgrade
+from resolver.embeddings import build_provider as build_embeddings
 
 REQUESTS = Counter(
     "hippo_http_requests_total",
@@ -79,6 +88,21 @@ def _check_health(db: Database) -> tuple[HealthResponse, int]:
     ), 200
 
 
+class _LazyDatabase:
+    """Defers to app.state.db, which the lifespan sets.
+
+    The router needs somewhere to get a connection from, and the pool is opened
+    at startup rather than at import. This is that indirection and nothing more.
+    """
+
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    def connection(self, timeout: float | None = None) -> AbstractContextManager[Connection]:
+        db: Database = self._app.state.db
+        return db.connection(timeout=timeout)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the app. Takes settings explicitly so tests need no environment."""
     resolved = settings if settings is not None else get_settings()
@@ -105,10 +129,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Hippo",
-        version="0.0.0",
+        version="0.1.0",
         summary="Open-source enterprise memory.",
+        description=(
+            "Every answer is filtered by the permissions of the person asking, "
+            "enforced in the database rather than in application code. Actions "
+            "are proposed and wait for a human."
+        ),
         lifespan=lifespan,
     )
+
+    cached: dict[str, Agent] = {}
+
+    def agent(conn: Connection) -> Agent:
+        if "agent" not in cached:
+            cached["agent"] = Agent(
+                build_provider(resolved),
+                embedder=build_embeddings(resolved),
+                directory=load_directory(conn),
+                policy=load_policy(resolved.risk_policy_path),
+            )
+        return cached["agent"]
+
+    # The router borrows connections through the pool the lifespan opens, so it
+    # reads app.state.db at request time rather than capturing a pool that does
+    # not exist yet.
+    app.include_router(build_router(_LazyDatabase(app), agent))
 
     @app.middleware("http")
     async def _count_requests(

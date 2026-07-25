@@ -5,6 +5,7 @@ never from the database. See CLAUDE.md, Conventions.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, model_validator
@@ -36,6 +37,11 @@ class Settings(BaseSettings):
     pool_min_size: int = Field(default=1, ge=0)
     pool_max_size: int = Field(default=10, ge=1)
     pool_open_timeout: float = Field(default=10.0, gt=0)
+    risk_policy_path: Path | None = Field(
+        default=None,
+        description="TOML file classifying action types as routine or consequential. "
+        "Absent means the safest policy there is: everything waits for a human.",
+    )
     migrate_on_startup: bool = Field(
         default=True,
         description="Apply pending migrations when the API boots. Keeps `docker compose up` "
