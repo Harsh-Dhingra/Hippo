@@ -1,9 +1,10 @@
 """P1-SYNC-2's done-condition: private-channel membership gates acl_grants.
 
 This walks the whole path rather than asserting on an intermediate table. Slack
-fixtures go in through the connector and the runtime, a stand-in for the
-resolver creates entities, the projection fills acl_grants, and then the
-permission filter is asked what each person can see.
+fixtures go in through the connector and the runtime, P1-RES-1 extracts and
+P1-RES-2 resolves, the projection fills acl_grants, and then the permission
+filter is asked what each person can see. Only chunking is still a stand-in,
+because that is P1-RES-3.
 
 That last step matters. acl_grants having the right rows is a claim about a
 table; visible_chunks returning the right content is the claim the project
@@ -22,9 +23,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from core.db import Connection
+from resolver.resolution import resolve_connector
 from sync.connectors.slack import FixtureTransport, SlackConnector
 from sync.runtime import SyncRuntime, project_acl_grants
-from tests.resolver_stub import principal, resolve_like_the_resolver, visible_text
+from tests.chunk_stub import chunk_everything, principal, visible_text
 
 pytestmark = pytest.mark.requires_db
 
@@ -48,7 +50,8 @@ def connector_id(migrated: Connection) -> UUID:
 def synced(migrated: Connection, connector_id: UUID) -> Connection:
     runtime = SyncRuntime(SlackConnector(FixtureTransport(SLACK_FIXTURES)), connector_id)
     runtime.sync_all(migrated)
-    resolve_like_the_resolver(migrated, connector_id)
+    resolve_connector(migrated, connector_id)
+    chunk_everything(migrated)
     project_acl_grants(migrated, connector_id)
     return migrated
 
