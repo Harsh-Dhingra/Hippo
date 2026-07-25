@@ -40,6 +40,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "actions": frozenset({"SELECT", "UPDATE"}),
         "entities": READ,
         "entity_sources": READ,
+        "jobs": WRITE,
         "edges": NONE,
         "chunks": NONE,
         "memory_scopes": NONE,
@@ -56,6 +57,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "edges": WRITE,
         "chunks": WRITE,
         "memory_scopes": READ,
+        "jobs": WRITE,
         "acl_grants": NONE,
         "sync_state": NONE,
         "actions": NONE,
@@ -64,6 +66,8 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
     },
     "hippo_agent": {
         "actions": frozenset({"INSERT"}),
+        # The agent proposes into actions. It does not schedule work.
+        "jobs": NONE,
         "chunks": NONE,
         "raw_records": NONE,
         "entities": NONE,
