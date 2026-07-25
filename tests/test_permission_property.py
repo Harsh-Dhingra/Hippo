@@ -59,10 +59,15 @@ class Matrix:
     grants: tuple[tuple[UUID, UUID], ...]  # (entity, principal)
     scopes: tuple[Scope, ...]
     chunks: tuple[tuple[UUID, UUID, UUID], ...]  # (chunk, entity, scope)
+    identities: tuple[tuple[UUID, UUID], ...] = ()  # (user, identity)
 
     @property
     def principals(self) -> tuple[UUID, ...]:
         return self.users + self.groups
+
+    @property
+    def identity_of(self) -> dict[UUID, UUID]:
+        return dict(self.identities)
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +76,19 @@ class Matrix:
 
 
 def expanded_principals(matrix: Matrix, principal: UUID) -> set[UUID]:
-    """The principal itself, plus every group that transitively contains it."""
+    """Every account this human holds, plus every group transitively containing
+    any of them.
+
+    Migration 008 widened this: one person's Slack and Jira accounts share an
+    identity_id, and a grant to either is visible to both. The sibling step
+    comes first and is not recursive — identity is an equivalence class, not a
+    graph to walk — and only groups expand upward from there.
+    """
+    identity = matrix.identity_of.get(principal)
     closure = {principal}
-    frontier = [principal]
+    if identity is not None:
+        closure |= {user for user, other in matrix.identities if other == identity}
+    frontier = list(closure)
     while frontier:
         member = frontier.pop()
         for group, contained in matrix.memberships:
@@ -150,6 +165,13 @@ def random_matrix(rng: random.Random) -> Matrix:
         (uuid4(), rng.choice(entities), rng.choice(scopes).id) for _ in range(rng.randint(3, 12))
     )
 
+    # One human with several connector accounts (migration 008). Pools are few
+    # and membership is likely, so shared identities actually occur; a pool of
+    # one is generated too, because "linked to nobody" must behave as if the
+    # column were null.
+    pools = [uuid4() for _ in range(rng.randint(0, 2))]
+    identities = tuple((user, rng.choice(pools)) for user in users if pools and rng.random() < 0.5)
+
     return Matrix(
         users=users,
         groups=groups,
@@ -158,6 +180,7 @@ def random_matrix(rng: random.Random) -> Matrix:
         grants=tuple(sorted(grants)),
         scopes=tuple(scopes),
         chunks=chunks,
+        identities=identities,
     )
 
 
@@ -165,9 +188,11 @@ def load(conn: Connection, matrix: Matrix) -> None:
     """Replace the database contents with this matrix."""
     with conn.cursor() as cur:
         cur.execute(f"TRUNCATE {', '.join(_OWNED_TABLES)} CASCADE")
+        identity_of = matrix.identity_of
         cur.executemany(
-            "INSERT INTO principals (id, kind) VALUES (%s, %s)",
-            [(u, "user") for u in matrix.users] + [(g, "group") for g in matrix.groups],
+            "INSERT INTO principals (id, kind, identity_id) VALUES (%s, %s, %s)",
+            [(u, "user", identity_of.get(u)) for u in matrix.users]
+            + [(g, "group", None) for g in matrix.groups],
         )
         if matrix.memberships:
             cur.executemany(
@@ -218,6 +243,7 @@ def _describe(matrix: Matrix, principal: UUID, leaked: set[UUID], missing: set[U
         f"leaked={sorted(leaked)}\n"
         f"missing={sorted(missing)}\n"
         f"memberships={matrix.memberships}\n"
+        f"identities={matrix.identities}\n"
         f"grants={matrix.grants}\n"
         f"scopes={matrix.scopes}\n"
         f"chunks={matrix.chunks}"

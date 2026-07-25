@@ -16,6 +16,7 @@ from resolver.resolution import (
     BY_SOURCE_ID,
     NEW,
     ResolutionStats,
+    link_principal_identities,
     merge_key,
     normalize_name,
     resolve_candidate,
@@ -430,3 +431,160 @@ def _raw(
         row = cur.fetchone()
     assert row is not None
     return UUID(str(row[0]))
+
+
+# ---------------------------------------------------------------------------
+# One human, several accounts. The same rule as the entity merge — a matching
+# email — applied to principals, because a grant names an account and a person
+# holds one per system.
+# ---------------------------------------------------------------------------
+
+
+def _principal(
+    conn: Connection, connector_id: UUID, source_id: str, email: str | None, kind: str = "user"
+) -> UUID:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO principals (kind, connector_id, source_id, email) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (kind, connector_id, source_id, email),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    return UUID(str(row[0]))
+
+
+def _identity(conn: Connection, principal_id: UUID) -> UUID | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT identity_id FROM principals WHERE id = %s", (principal_id,))
+        row = cur.fetchone()
+    assert row is not None
+    return None if row[0] is None else UUID(str(row[0]))
+
+
+def test_two_accounts_with_one_email_become_one_person(migrated: Connection) -> None:
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "U-ALICE", "alice@acme.com")
+    b = _principal(migrated, jira, "u-alice", "alice@acme.com")
+
+    assert link_principal_identities(migrated) == 2
+
+    assert _identity(migrated, a) is not None
+    assert _identity(migrated, a) == _identity(migrated, b)
+
+
+def test_email_matching_ignores_case_and_padding(migrated: Connection) -> None:
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "U-ALICE", "Alice@Acme.com")
+    b = _principal(migrated, jira, "u-alice", " alice@acme.com ")
+
+    link_principal_identities(migrated)
+
+    assert _identity(migrated, a) == _identity(migrated, b)
+
+
+def test_different_people_are_not_linked(migrated: Connection) -> None:
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "U-ALICE", "alice@acme.com")
+    b = _principal(migrated, jira, "u-bob", "bob@acme.com")
+
+    link_principal_identities(migrated)
+
+    assert _identity(migrated, a) is None
+    assert _identity(migrated, b) is None
+
+
+def test_accounts_without_an_email_are_never_linked(migrated: Connection) -> None:
+    """An absent email is not a match. Linking on it would merge every
+    service account in the workspace into one person."""
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "U-BOT", None)
+    b = _principal(migrated, jira, "u-bot", None)
+    c = _principal(migrated, slack, "U-BLANK", "   ")
+
+    assert link_principal_identities(migrated) == 0
+
+    assert _identity(migrated, a) is None
+    assert _identity(migrated, b) is None
+    assert _identity(migrated, c) is None
+
+
+def test_a_lone_account_gets_no_identity(migrated: Connection) -> None:
+    """identity_id means 'one of several', not 'processed'."""
+    slack = uuid4()
+    _connectors(migrated, slack, uuid4())
+    a = _principal(migrated, slack, "U-ALICE", "alice@acme.com")
+
+    link_principal_identities(migrated)
+
+    assert _identity(migrated, a) is None
+
+
+def test_groups_are_never_linked(migrated: Connection) -> None:
+    """A shared mailing address is not shared membership."""
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "G-ENG", "eng@acme.com", kind="group")
+    b = _principal(migrated, jira, "g-eng", "eng@acme.com", kind="group")
+
+    assert link_principal_identities(migrated) == 0
+
+    assert _identity(migrated, a) is None
+    assert _identity(migrated, b) is None
+
+
+def test_linking_is_idempotent(migrated: Connection) -> None:
+    """Re-running must not reshuffle ids that audit records may refer to."""
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "U-ALICE", "alice@acme.com")
+    _principal(migrated, jira, "u-alice", "alice@acme.com")
+
+    link_principal_identities(migrated)
+    first = _identity(migrated, a)
+
+    assert link_principal_identities(migrated) == 0
+    assert _identity(migrated, a) == first
+
+
+def test_a_third_account_joins_the_existing_identity(migrated: Connection) -> None:
+    slack, jira = uuid4(), uuid4()
+    _connectors(migrated, slack, jira)
+    a = _principal(migrated, slack, "U-ALICE", "alice@acme.com")
+    _principal(migrated, jira, "u-alice", "alice@acme.com")
+    link_principal_identities(migrated)
+    existing = _identity(migrated, a)
+
+    github = uuid4()
+    with migrated.cursor() as cur:
+        cur.execute(
+            "INSERT INTO connectors (id, kind, display_name, config) "
+            "VALUES (%s, 'slack', 'Second Slack', '{}')",
+            (github,),
+        )
+    c = _principal(migrated, github, "U-ALICE-2", "alice@acme.com")
+
+    assert link_principal_identities(migrated) == 1
+    assert _identity(migrated, c) == existing
+
+
+def test_a_resolution_pass_links_accounts(
+    migrated: Connection, both_systems: tuple[UUID, UUID]
+) -> None:
+    """It runs as part of resolution, not as a separate step someone has to
+    remember: ARCHITECTURE section 12 point 1 is unreachable without it."""
+    stats = resolve_records(migrated, load_raw_records(migrated))
+
+    assert stats.principals_linked >= 2
+
+
+def _connectors(conn: Connection, slack: UUID, jira: UUID) -> None:
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO connectors (id, kind, display_name, config) VALUES (%s, %s, %s, '{}')",
+            [(slack, "slack", "Slack"), (jira, "jira", "Jira")],
+        )

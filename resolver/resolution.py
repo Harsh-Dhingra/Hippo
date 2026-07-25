@@ -94,6 +94,7 @@ class ResolutionStats:
     reattached: int = 0
     edges_written: int = 0
     edges_skipped: int = 0
+    principals_linked: int = 0
     by_rule: dict[str, int] = field(default_factory=dict)
 
     def record(self, rule: str) -> None:
@@ -308,6 +309,8 @@ def resolve_records(conn: Connection, records: Sequence[RawRecord]) -> Resolutio
             else:
                 stats.edges_skipped += 1
 
+    stats.principals_linked = link_principal_identities(conn)
+
     LOG.info(
         "resolution pass complete",
         extra={
@@ -316,10 +319,54 @@ def resolve_records(conn: Connection, records: Sequence[RawRecord]) -> Resolutio
             "reattached": stats.reattached,
             "edges_written": stats.edges_written,
             "edges_skipped": stats.edges_skipped,
+            "principals_linked": stats.principals_linked,
             "by_rule": stats.by_rule,
         },
     )
     return stats
+
+
+def link_principal_identities(conn: Connection) -> int:
+    """Mark the accounts that belong to one human.
+
+    Rule 2 above, applied to principals instead of entities. Merging Alice's
+    Slack and Jira *entities* makes the graph say one person authored both; it
+    does nothing for permissions, because a grant names an account in a source
+    system and Alice holds two. Without this, no single asker could ever get an
+    answer spanning two connectors — ARCHITECTURE section 12 point 1 is
+    unreachable.
+
+    What it does not do matters as much. It never merges accounts with no
+    email, because an absent email is not a match. It never touches groups: a
+    shared mailing address is not shared membership, and merging two groups
+    would hand every member of one the grants of the other. And it only links
+    accounts that have a counterpart, so identity_id always means "one of
+    several" rather than "processed".
+
+    Idempotent, and safe to run on every pass: an existing identity_id is
+    reused rather than replaced, so linking never reshuffles ids that grants
+    or audit records may already refer to.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "WITH people AS ("
+            "    SELECT array_agg(id) AS ids,"
+            "           coalesce(min(identity_id::text)::uuid, gen_random_uuid()) AS identity"
+            "    FROM principals"
+            "    WHERE kind = 'user' AND email IS NOT NULL AND btrim(email) <> ''"
+            "    GROUP BY lower(btrim(email))"
+            "    HAVING count(*) > 1"
+            ") "
+            "UPDATE principals p SET identity_id = people.identity "
+            "FROM people "
+            "WHERE p.id = ANY (people.ids) "
+            "  AND p.identity_id IS DISTINCT FROM people.identity"
+        )
+        linked = cur.rowcount
+
+    if linked:
+        LOG.info("linked accounts to people", extra={"principals": linked})
+    return linked
 
 
 def resolve_connector(conn: Connection, connector_id: UUID | None = None) -> ResolutionStats:

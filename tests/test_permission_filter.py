@@ -445,3 +445,108 @@ def test_a_user_cannot_be_used_as_a_group(world: Connection) -> None:
             "INSERT INTO principal_memberships (group_id, member_id) VALUES (%s, %s)",
             (BOB, CAROL),
         )
+
+
+# ---------------------------------------------------------------------------
+# One human, several accounts (migration 008). This widens visibility, so each
+# case below is an attack on the widening rather than a demonstration of it.
+# ---------------------------------------------------------------------------
+
+
+def link(conn: Connection, identity: UUID, *principals: UUID) -> None:
+    conn.execute(
+        "UPDATE principals SET identity_id = %s WHERE id = ANY(%s)",
+        (identity, list(principals)),
+    )
+
+
+IDENTITY = UUID("51000000-0000-0000-0000-000000000051")
+OTHER_IDENTITY = UUID("52000000-0000-0000-0000-000000000052")
+
+
+def test_a_linked_account_sees_what_the_other_was_granted(world: Connection) -> None:
+    """The point of the feature: asking as the Slack account reaches what Jira
+    granted the same human."""
+    assert C_BOB_ORG not in visible(world, CAROL)
+
+    link(world, IDENTITY, BOB, CAROL)
+
+    assert C_BOB_ORG in visible(world, CAROL)
+
+
+def test_linking_is_symmetric(world: Connection) -> None:
+    link(world, IDENTITY, BOB, CAROL)
+
+    assert visible(world, BOB) == visible(world, CAROL)
+
+
+def test_an_unlinked_account_gains_nothing(world: Connection) -> None:
+    """The obvious way to get this wrong is to treat a NULL identity_id as a
+    value, which would put every unlinked account in one equivalence class."""
+    before = visible(world, CAROL)
+
+    link(world, IDENTITY, BOB)  # bob alone; carol untouched
+
+    assert visible(world, CAROL) == before
+    assert C_BOB_ORG not in visible(world, CAROL)
+
+
+def test_two_different_identities_stay_apart(world: Connection) -> None:
+    link(world, IDENTITY, BOB)
+    link(world, OTHER_IDENTITY, CAROL)
+
+    assert C_BOB_ORG not in visible(world, CAROL)
+
+
+def test_a_linked_account_inherits_the_other_account_s_groups(world: Connection) -> None:
+    """Alice is in eng. Linking carol to alice must reach eng's grants, or the
+    widening would only work for grants held directly."""
+    link(world, IDENTITY, ALICE, CAROL)
+
+    assert C_ENG_ORG in visible(world, CAROL)
+    assert C_LEADS_ORG in visible(world, CAROL), "and through the nested group too"
+
+
+def test_a_linked_account_reaches_the_other_s_personal_scope(world: Connection) -> None:
+    """Deliberate, and worth stating: a personal scope belongs to the human, and
+    both accounts are that human.
+
+    Both chunks below hang off E_BOB, so the ACL half holds for carol either
+    way and only the scope half decides. The two checks are a conjunction, and
+    a test that moves both at once measures neither.
+    """
+    mine = UUID("48000000-0000-0000-0000-000000000048")
+    theirs = UUID("49000000-0000-0000-0000-000000000049")
+    world.execute(
+        "INSERT INTO chunks (id, entity_id, scope_id, content) VALUES (%s, %s, %s, %s), "
+        "(%s, %s, %s, %s)",
+        (mine, E_BOB, PERSONAL_BOB, "in bob's", theirs, E_BOB, PERSONAL_ALICE, "in alice's"),
+    )
+    assert mine not in visible(world, CAROL)
+
+    link(world, IDENTITY, BOB, CAROL)
+
+    assert mine in visible(world, CAROL)
+    assert theirs not in visible(world, CAROL), "but not a third party's"
+
+
+def test_linking_does_not_grant_what_nobody_holds(world: Connection) -> None:
+    """Widening the closure must not weaken deny-by-default."""
+    link(world, IDENTITY, ALICE, BOB, CAROL)
+
+    assert C_NONE_ORG not in visible(world, CAROL)
+
+
+def test_a_group_cannot_be_given_an_identity(world: Connection) -> None:
+    """A shared identity on two groups would hand every member of one the
+    grants of the other."""
+    with pytest.raises(errors.CheckViolation):
+        world.execute("UPDATE principals SET identity_id = %s WHERE id = %s", (IDENTITY, ENG))
+
+
+def test_an_identity_shared_with_nobody_changes_nothing(world: Connection) -> None:
+    before = visible(world, BOB)
+
+    link(world, IDENTITY, BOB)
+
+    assert visible(world, BOB) == before
