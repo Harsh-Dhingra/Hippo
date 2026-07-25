@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "prometheus-client>=0.21",
+    "anthropic>=0.120.0",
 ]
 
 [project.scripts]

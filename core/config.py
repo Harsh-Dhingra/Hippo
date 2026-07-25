@@ -12,6 +12,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 EmbeddingProvider = Literal["hashing", "openai"]
+ModelProviderName = Literal["anthropic", "openai"]
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+ThinkingMode = Literal["adaptive", "disabled"]
 
 
 class Settings(BaseSettings):
@@ -62,6 +65,56 @@ class Settings(BaseSettings):
         ge=1,
         description="Must match the vector width in the chunks table.",
     )
+
+    # --- Model provider ---------------------------------------------------
+    # Pluggable permanently (STACK.md): a self-hoster who cannot point this at
+    # their own inference endpoint has not really self-hosted anything.
+    model_provider: ModelProviderName = Field(default="anthropic")
+    model: str = Field(
+        default="claude-opus-5",
+        description="Model id. Anthropic ids are bare, with no date suffix.",
+    )
+    model_api_key: str = Field(default="", description="From the environment, never the repo.")
+    model_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Only read by the openai-compatible provider. Any endpoint speaking the "
+        "chat-completions shape, including vLLM, Ollama and LM Studio.",
+    )
+    model_max_tokens: int = Field(
+        default=4096,
+        gt=0,
+        description="Caps thinking and response text together on current Anthropic models, "
+        "so a budget sized around the answer alone will truncate.",
+    )
+    model_effort: Effort = Field(default="high")
+    model_thinking: ThinkingMode = Field(default="adaptive")
+    model_refusal_fallback: bool = Field(
+        default=True,
+        description="Re-run a declined request on the recommended fallback model. "
+        "Claude API only; turn off when pointing at Bedrock, Vertex or Foundry.",
+    )
+
+    @model_validator(mode="after")
+    def _check_model_config(self) -> Self:
+        """Catch the combination the API rejects, before a request is sent.
+
+        Current Anthropic models allow thinking to be turned off only at effort
+        `high` or below; pairing `disabled` with `xhigh` or `max` returns a 400.
+        Failing here names the problem instead of surfacing it as a request
+        error under load.
+        """
+        if (
+            self.model_provider == "anthropic"
+            and self.model_thinking == "disabled"
+            and self.model_effort in ("xhigh", "max")
+        ):
+            msg = (
+                f"model_thinking='disabled' is not allowed at model_effort="
+                f"'{self.model_effort}'. Use effort 'high' or below, or leave "
+                f"thinking adaptive."
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _check_embedding_config(self) -> Self:
