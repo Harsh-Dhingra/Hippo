@@ -2,13 +2,19 @@
 
 Secrets come from the environment or a mounted file, never from the repo and
 never from the database. See CLAUDE.md, Conventions.
+
+Two of those secrets are typed as SecretStr, and the database URL is kept out
+of this object's repr. That is not decoration: a Settings instance ends up in
+log lines, in tracebacks, and in whatever a debugger prints, and pydantic's
+default repr spells out every field it holds. Discovering that from a support
+bundle is a bad way to discover it.
 """
 
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -31,6 +37,11 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql://localhost:5432/hippo",
         description="libpq connection string. Carries the only credential this process needs.",
+        # Kept out of the repr rather than typed as SecretStr: every database
+        # call needs the plain string, and a .get_secret_value() at each of
+        # those call sites would be noise that teaches nobody anything. What
+        # matters is that printing the settings does not print the password.
+        repr=False,
     )
     service_name: str = Field(default="hippo-api", description="Value stamped on every log line.")
     log_level: LogLevel = Field(default="INFO")
@@ -65,7 +76,9 @@ class Settings(BaseSettings):
         description="Any endpoint speaking the OpenAI /embeddings shape, including vLLM, "
         "Ollama and LM Studio.",
     )
-    embedding_api_key: str = Field(default="", description="From the environment, never the repo.")
+    embedding_api_key: SecretStr = Field(
+        default=SecretStr(""), description="From the environment, never the repo."
+    )
     embedding_dimensions: int = Field(
         default=1024,
         ge=1,
@@ -80,7 +93,9 @@ class Settings(BaseSettings):
         default="claude-opus-5",
         description="Model id. Anthropic ids are bare, with no date suffix.",
     )
-    model_api_key: str = Field(default="", description="From the environment, never the repo.")
+    model_api_key: SecretStr = Field(
+        default=SecretStr(""), description="From the environment, never the repo."
+    )
     model_base_url: str = Field(
         default="https://api.openai.com/v1",
         description="Only read by the openai-compatible provider. Any endpoint speaking the "

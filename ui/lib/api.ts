@@ -134,7 +134,7 @@ export type Action = {
   risk_class: string;
   payload: Record<string, unknown>;
   target_entity: string | null;
-  target_title: string | null;
+  summary: string | null;
   connector_kind: string;
   requested_by: string;
   approved_by: string | null;

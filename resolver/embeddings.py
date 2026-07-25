@@ -193,7 +193,7 @@ def build_provider(settings: Settings) -> EmbeddingProvider:
         return OpenAICompatibleEmbeddings(
             settings.embedding_model,
             base_url=settings.embedding_base_url,
-            api_key=settings.embedding_api_key,
+            api_key=settings.embedding_api_key.get_secret_value(),
             dimensions=settings.embedding_dimensions,
         )
     LOG.warning(

@@ -15,7 +15,7 @@ from typing import Any
 import anthropic
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from agent.providers import (
     AnthropicProvider,
@@ -412,7 +412,9 @@ def test_count_tokens_reports_errors_the_same_way() -> None:
 
 
 def test_the_default_provider_is_anthropic_on_the_current_model() -> None:
-    provider = build_provider(Settings(model_api_key="k", _env_file=None))  # type: ignore[call-arg]
+    provider = build_provider(
+        Settings(model_api_key=SecretStr("k"), _env_file=None)  # type: ignore[call-arg]
+    )
 
     assert isinstance(provider, AnthropicProvider)
     assert provider.model == "claude-opus-5"

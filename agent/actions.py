@@ -308,14 +308,18 @@ def insert_pending(
     needs SELECT on the table, and the agent role has none. Widening the grant
     to read back a row it just wrote would trade the guarantee that the agent
     cannot read other people's actions for a convenience.
+
+    The summary is stored rather than recomposed later, so the approval surface
+    needs no read path into entities. It is written once, from sources the
+    asker could see, and is what a person approves from.
     """
     action_id = uuid4()
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO actions "
             "    (id, requested_by, connector_id, action_type, target_entity, payload, "
-            "     risk_class, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')",
+            "     risk_class, status, summary) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)",
             (
                 action_id,
                 requested_by,
@@ -324,6 +328,7 @@ def insert_pending(
                 target_entity,
                 Jsonb(payload),
                 risk_class,
+                summary,
             ),
         )
 

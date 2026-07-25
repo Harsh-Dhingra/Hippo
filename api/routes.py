@@ -134,7 +134,7 @@ class ActionResponse(BaseModel):
     risk_class: str
     payload: dict[str, Any]
     target_entity: UUID | None
-    target_title: str | None
+    summary: str | None
     connector_kind: str
     requested_by: UUID
     approved_by: UUID | None

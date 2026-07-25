@@ -111,9 +111,13 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         # Approve and decline. Not INSERT: a proposal comes from the agent, and
         # an API that could mint its own would make the split decorative.
         "actions": frozenset({"SELECT", "UPDATE"}),
-        "entities": READ,
         "connectors": READ,
         "principals": READ,
+        # Revoked by 013. An entity title is content — a Jira issue's title is
+        # its summary — so reading one here would be a path around
+        # visible_chunks() held by the process that serves users. The approval
+        # screen reads actions.summary instead.
+        "entities": NONE,
         "chunks": NONE,
         "raw_records": NONE,
         "entity_sources": NONE,

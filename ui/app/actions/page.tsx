@@ -68,7 +68,7 @@ export default async function ActionsPage({
             >
               <div className="flex items-baseline gap-3">
                 <span className="text-sm font-medium">
-                  {action.action_type} on {action.target_title ?? "—"}
+                  {action.summary ?? action.action_type}
                 </span>
                 <span className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
                   {action.status}
@@ -80,6 +80,9 @@ export default async function ActionsPage({
                 ) : null}
               </div>
 
+              {/* The full payload, never a truncation. The summary above is a
+                  label; this is the thing being approved, and a person cannot
+                  consent to a body they were only shown the first line of. */}
               <pre className="mt-2 overflow-x-auto rounded bg-[#f7f8fa] p-3 text-xs">
                 {JSON.stringify(action.payload, null, 2)}
               </pre>

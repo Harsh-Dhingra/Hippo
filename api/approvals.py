@@ -64,7 +64,7 @@ class Action(BaseModel):
     risk_class: str
     payload: dict[str, Any]
     target_entity: UUID | None
-    target_title: str | None
+    summary: str | None
     connector_id: UUID
     connector_kind: str
     requested_by: UUID
@@ -83,13 +83,16 @@ class Action(BaseModel):
 # before migration 012.
 _MINE = "SELECT principal_id FROM my_principals(%s)"
 
+# No join to entities. An entity title is content — a Jira issue's title is
+# its summary — and reaching it from here would be a read path around
+# visible_chunks() held by the process that serves users, for the sake of one
+# label. The agent stores the summary when it proposes (migration 013).
 _SELECT = (
     "SELECT a.id, a.action_type, a.status, a.risk_class, a.payload, a.target_entity, "
-    "       e.title, a.connector_id, c.kind, a.requested_by, a.approved_by, a.declined_by, "
+    "       a.summary, a.connector_id, c.kind, a.requested_by, a.approved_by, a.declined_by, "
     "       a.executed_at, a.rolled_back_by, a.error, a.created_at "
     "FROM actions a "
     "JOIN connectors c ON c.id = a.connector_id "
-    "LEFT JOIN entities e ON e.id = a.target_entity "
 )
 
 
@@ -101,7 +104,7 @@ def _row(row: Any) -> Action:
         risk_class=str(row[3]),
         payload=dict(row[4] or {}),
         target_entity=None if row[5] is None else UUID(str(row[5])),
-        target_title=None if row[6] is None else str(row[6]),
+        summary=None if row[6] is None else str(row[6]),
         connector_id=UUID(str(row[7])),
         connector_kind=str(row[8]),
         requested_by=UUID(str(row[9])),

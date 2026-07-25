@@ -103,13 +103,36 @@ def test_the_failure_names_the_variable_it_wanted(monkeypatch: pytest.MonkeyPatc
     assert "HIPPO_JIRA_TOKEN_11111111_2222_3333_4444_555555555555" in str(caught.value)
 
 
-def test_no_credential_is_ever_read_from_the_database(
+def test_a_token_cannot_even_be_put_in_the_database(
+    migrated: Connection, slack_connector: UUID
+) -> None:
+    """CLAUDE.md rule 4, now enforced by the schema rather than by this test.
+
+    The original version of this put a token in config and checked that
+    build_connector ignored it. Migration 013 makes the premise unreachable:
+    the row will not store one. That is the better outcome, so the assertion
+    moved to where the refusal happens.
+    """
+    from psycopg import errors
+
+    with pytest.raises(errors.CheckViolation):
+        migrated.execute(
+            'UPDATE connectors SET config = config || \'{"token": "xoxb-in-the-db"}\'::jsonb '
+            "WHERE id = %s",
+            (slack_connector,),
+        )
+    migrated.rollback()
+
+
+def test_a_credential_smuggled_under_another_name_is_still_not_used(
     migrated: Connection, slack_connector: UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CLAUDE.md rule 4: connectors.config holds no tokens. Putting one there
-    must not make it work."""
+    """The CHECK matches key names, so a determined operator could call it
+    something else. That layer is not the only one: the worker reads
+    credentials from the environment and from nowhere else, so config remains
+    inert whatever it is called."""
     migrated.execute(
-        'UPDATE connectors SET config = config || \'{"token": "xoxb-in-the-db"}\'::jsonb '
+        'UPDATE connectors SET config = config || \'{"workspace_url": "xoxb-not-a-url"}\'::jsonb '
         "WHERE id = %s",
         (slack_connector,),
     )

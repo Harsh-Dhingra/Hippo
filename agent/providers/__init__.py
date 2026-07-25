@@ -44,11 +44,11 @@ def build_provider(settings: Settings) -> ModelProvider:
         return OpenAICompatibleProvider(
             settings.model,
             base_url=settings.model_base_url,
-            api_key=settings.model_api_key,
+            api_key=settings.model_api_key.get_secret_value(),
         )
     return AnthropicProvider(
         settings.model,
-        api_key=settings.model_api_key,
+        api_key=settings.model_api_key.get_secret_value(),
         effort=settings.model_effort,
         thinking=settings.model_thinking,
         refusal_fallback=settings.model_refusal_fallback,
