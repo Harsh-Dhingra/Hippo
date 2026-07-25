@@ -17,7 +17,8 @@
         },
         "reporter": {
           "accountId": "u-bob"
-        }
+        },
+        "description": "Legal have flagged the liability cap. Nothing ships until that clause is agreed."
       }
     },
     {
@@ -34,6 +35,24 @@
         },
         "reporter": {
           "accountId": "u-alice"
+        },
+        "description": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Our discount floor is eighteen percent."
+                },
+                {
+                  "type": "text",
+                  "text": " Anything lower needs the CFO."
+                }
+              ]
+            }
+          ]
         }
       }
     },
@@ -51,7 +70,8 @@
         },
         "reporter": {
           "accountId": "u-carol"
-        }
+        },
+        "description": null
       }
     }
   ]

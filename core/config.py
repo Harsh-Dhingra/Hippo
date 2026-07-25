@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+EmbeddingProvider = Literal["hashing", "openai"]
 
 
 class Settings(BaseSettings):
@@ -37,6 +38,37 @@ class Settings(BaseSettings):
         description="Apply pending migrations when the API boots. Keeps `docker compose up` "
         "to a single step; set false when migrations are run as their own deploy stage.",
     )
+
+    # --- Embeddings -------------------------------------------------------
+    # Config-abstracted per STACK.md, so changing the model is a resolver
+    # re-run rather than a migration. The default needs no service, which is
+    # what lets the project run before anyone has chosen a model. It is
+    # lexical, not semantic; see resolver/embeddings.py.
+    embedding_provider: EmbeddingProvider = Field(default="hashing")
+    embedding_model: str = Field(
+        default="",
+        description="Required when embedding_provider is 'openai'. Left empty on purpose: "
+        "STACK.md defers the pick to a measured eval, and a guessed default would ship "
+        "an unmeasured one to every adopter.",
+    )
+    embedding_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Any endpoint speaking the OpenAI /embeddings shape, including vLLM, "
+        "Ollama and LM Studio.",
+    )
+    embedding_api_key: str = Field(default="", description="From the environment, never the repo.")
+    embedding_dimensions: int = Field(
+        default=1024,
+        ge=1,
+        description="Must match the vector width in the chunks table.",
+    )
+
+    @model_validator(mode="after")
+    def _check_embedding_config(self) -> Self:
+        if self.embedding_provider == "openai" and not self.embedding_model:
+            msg = "embedding_model is required when embedding_provider is 'openai'"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _check_pool_bounds(self) -> Self:

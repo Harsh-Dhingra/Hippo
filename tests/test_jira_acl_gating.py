@@ -13,10 +13,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from core.db import Connection
-from resolver.resolution import resolve_connector
 from sync.connectors.jira import FixtureTransport, JiraConnector
 from sync.runtime import SyncRuntime, project_acl_grants
-from tests.chunk_stub import chunk_everything, principal, visible_text
+from tests.pipeline import principal, resolve_and_enrich, visible_text
 
 pytestmark = pytest.mark.requires_db
 
@@ -41,8 +40,7 @@ def connector_id(migrated: Connection) -> UUID:
 @pytest.fixture
 def synced(migrated: Connection, connector_id: UUID) -> Connection:
     SyncRuntime(JiraConnector(FixtureTransport(JIRA_FIXTURES)), connector_id).sync_all(migrated)
-    resolve_connector(migrated, connector_id)
-    chunk_everything(migrated)
+    resolve_and_enrich(migrated, connector_id)
     project_acl_grants(migrated, connector_id)
     return migrated
 

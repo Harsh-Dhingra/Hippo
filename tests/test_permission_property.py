@@ -188,9 +188,13 @@ def load(conn: Connection, matrix: Matrix) -> None:
             "VALUES (%s, %s, %s, %s, 'generated')",
             [(s.id, s.scope_type, s.owner, s.owner_kind) for s in matrix.scopes],
         )
+        # Distinct text per chunk: chunks are content-addressed within an
+        # entity, so two chunks of one entity saying the same thing are one
+        # chunk. Generating identical bodies would be generating a world the
+        # schema does not permit.
         cur.executemany(
-            "INSERT INTO chunks (id, entity_id, scope_id, content) VALUES (%s, %s, %s, 'body')",
-            list(matrix.chunks),
+            "INSERT INTO chunks (id, entity_id, scope_id, content) VALUES (%s, %s, %s, %s)",
+            [(chunk, entity, scope, str(chunk)) for chunk, entity, scope in matrix.chunks],
         )
 
 
