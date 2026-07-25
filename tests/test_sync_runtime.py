@@ -382,7 +382,7 @@ def test_syncing_slack_populates_every_table(
         scalar(migrated, "SELECT count(*) FROM raw_records WHERE source_type='slack.channel'") == 2
     )
     assert (
-        scalar(migrated, "SELECT count(*) FROM raw_records WHERE source_type='slack.message'") == 7
+        scalar(migrated, "SELECT count(*) FROM raw_records WHERE source_type='slack.message'") == 8
     )
     assert scalar(migrated, "SELECT count(*) FROM acl_source_grants") == 3
 

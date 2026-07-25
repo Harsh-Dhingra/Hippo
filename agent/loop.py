@@ -33,7 +33,17 @@ from uuid import UUID
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict
 
+from agent.actions import (
+    ProposedAction,
+    build_proposal,
+    describe,
+    insert_pending,
+    parse_proposal,
+    propose_system_prompt,
+    wants_action,
+)
 from agent.links import ConnectorDirectory, deep_link
+from agent.policy import RiskPolicy
 from agent.providers.base import (
     CompletionRequest,
     Message,
@@ -73,6 +83,11 @@ NOTHING_VISIBLE = (
     "cannot see."
 )
 
+NO_ACTION = (
+    "I could not turn that into an action I am allowed to propose, so I have "
+    "not proposed one. Nothing was changed."
+)
+
 
 class Citation(BaseModel):
     """One resolved citation marker."""
@@ -104,6 +119,7 @@ class Answer(BaseModel):
     usage: Usage = Usage()
     model: str = ""
     refused: bool = False
+    proposal: ProposedAction | None = None
 
     @property
     def cited_entity_ids(self) -> tuple[UUID, ...]:
@@ -143,11 +159,16 @@ class Agent:
         *,
         embedder: EmbeddingProvider | None = None,
         directory: ConnectorDirectory | None = None,
+        policy: RiskPolicy | None = None,
         max_tokens: int = 2048,
     ) -> None:
         self._provider = provider
         self._embedder = embedder
         self._directory = directory or ConnectorDirectory()
+        # No policy means the default policy, which is that everything needs a
+        # human. Failing open here would be the one default worth being loud
+        # about, so there is nothing to fail open to.
+        self._policy = policy or RiskPolicy()
         self._max_tokens = max_tokens
         self._graph = self._build_graph()
 
@@ -158,11 +179,31 @@ class Agent:
         graph.add_node("plan", self._plan)
         graph.add_node("retrieve", self._retrieve)
         graph.add_node("synthesize", self._synthesize)
+        graph.add_node("propose", self._propose)
         graph.add_edge(START, "plan")
         graph.add_edge("plan", "retrieve")
-        graph.add_edge("retrieve", "synthesize")
+        # The branch this graph was built for. Answering and proposing ask the
+        # model for different things and end in different places, and routing
+        # between them by an if-statement inside one node would hide the second
+        # path from the trace.
+        graph.add_conditional_edges(
+            "retrieve", self._route, {"synthesize": "synthesize", "propose": "propose"}
+        )
         graph.add_edge("synthesize", END)
+        graph.add_edge("propose", END)
         return graph.compile()
+
+    def _route(self, state: AgentState) -> str:
+        """Answer, or propose an action.
+
+        Reads the question and nothing else. The retrieved chunks are sitting
+        in state by now and are deliberately not consulted: whether to act is
+        the asking person's decision, and content from Slack must not be able
+        to promote a question into a request.
+        """
+        if state.get("hits") and wants_action(state["question"]):
+            return "propose"
+        return "synthesize"
 
     def _plan(self, state: AgentState) -> AgentState:
         plan = plan_query(state["question"], k=state.get("k", DEFAULT_K))
@@ -222,6 +263,74 @@ class Agent:
                 hits=tuple(hits),
                 usage=completion.usage,
                 model=completion.model,
+            )
+        }
+
+    def _propose(self, state: AgentState) -> AgentState:
+        """Turn a request into at most one pending row.
+
+        Every exit from this method that is not a pending row is a refusal to
+        write, and each is deliberate: the model declined, the reply did not
+        parse, the action was not in the vocabulary, the target was not
+        something the asker could see. None of them fall back to acting on a
+        partial understanding.
+        """
+        hits = state["hits"]
+        question = state["question"]
+
+        request = CompletionRequest(
+            system=propose_system_prompt(),
+            messages=(
+                Message(
+                    role="user",
+                    content=f"Request: {question}\n\nSources:\n{render_sources(hits)}",
+                ),
+            ),
+            max_tokens=self._max_tokens,
+        )
+        self._last_request = request
+        completion = self._provider.complete(request)
+
+        raw = None if completion.refused else parse_proposal(completion.text)
+        checked = None if raw is None else build_proposal(raw, hits, self._policy)
+
+        if raw is None or checked is None:
+            LOG.info("no action proposed", extra={"question": question})
+            return {
+                "answer": Answer(
+                    question=question,
+                    text=NO_ACTION,
+                    plan=state["plan"],
+                    hits=tuple(hits),
+                    usage=completion.usage,
+                    model=completion.model,
+                    refused=completion.refused,
+                )
+            }
+
+        action_type, target_entity, connector_id, payload, risk_class = checked
+        summary = describe(action_type, hits[raw.source - 1], payload)
+        proposal = insert_pending(
+            self._conn,
+            requested_by=state["principal_id"],
+            action_type=action_type,
+            target_entity=target_entity,
+            connector_id=connector_id,
+            payload=payload,
+            risk_class=risk_class,
+            summary=summary,
+        )
+
+        return {
+            "answer": Answer(
+                question=question,
+                text=f"{summary}\n\nNothing has happened yet: this is waiting for your approval.",
+                citations=self._citations(f"[{raw.source}]", hits),
+                plan=state["plan"],
+                hits=tuple(hits),
+                usage=completion.usage,
+                model=completion.model,
+                proposal=proposal,
             )
         }
 
