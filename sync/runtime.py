@@ -429,6 +429,12 @@ class SyncRuntime:
 
         with conn.transaction():
             written = persist_acls(conn, self._connector.kind, self._connector_id, collected)
+            # Projected in the same transaction, because acl_source_grants is
+            # not what the permission filter reads. Refreshing the source grants
+            # and leaving the projection for a later pass would mean a
+            # revocation that has landed but has not taken effect, which is the
+            # one state this stream exists to make impossible.
+            projected = project_acl_grants(conn, self._connector_id)
             save_cursor(
                 conn,
                 self._connector_id,
@@ -444,6 +450,7 @@ class SyncRuntime:
             extra={
                 "connector_id": str(self._connector_id),
                 "grants": written,
+                "projected": projected,
                 "dropped": len(collected) - written,
             },
         )
