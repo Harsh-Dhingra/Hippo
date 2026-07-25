@@ -24,7 +24,7 @@ import re
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from core.db import Connection
 from resolver.embeddings import EmbeddingProvider, to_pgvector
@@ -62,8 +62,15 @@ class RetrievalPlan(BaseModel):
     hops: int = Field(default=1, ge=0, le=2)
     identifiers: tuple[str, ...] = ()
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def rationale(self) -> str:
+        """Why this query searched the way it did.
+
+        A computed field rather than a plain property so it survives
+        model_dump(): the trace stores the plan, and a plan without its
+        explanation is half a trace.
+        """
         parts = ["keyword"]
         if self.use_vector:
             parts.append("vector")

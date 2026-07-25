@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, TypedDict
 from uuid import UUID
 
@@ -48,9 +49,11 @@ from agent.providers.base import (
     CompletionRequest,
     Message,
     ModelProvider,
+    ProviderError,
     Usage,
 )
 from agent.retrieval import DEFAULT_K, Hit, RetrievalPlan, plan_query, retrieve
+from agent.trace import StepTimer, Trace, TraceRetrieval, content_hash, new_trace_id, record
 from core.db import Connection
 from resolver.embeddings import EmbeddingProvider
 
@@ -120,6 +123,7 @@ class Answer(BaseModel):
     model: str = ""
     refused: bool = False
     proposal: ProposedAction | None = None
+    trace_id: UUID | None = None
 
     @property
     def cited_entity_ids(self) -> tuple[UUID, ...]:
@@ -171,6 +175,9 @@ class Agent:
         self._policy = policy or RiskPolicy()
         self._max_tokens = max_tokens
         self._graph = self._build_graph()
+        self._last_request: CompletionRequest | None = None
+        self._timer = StepTimer()
+        self._route_taken = "synthesize"
 
     # -- graph --------------------------------------------------------------
 
@@ -206,23 +213,31 @@ class Agent:
         return "synthesize"
 
     def _plan(self, state: AgentState) -> AgentState:
+        started = time.monotonic()
         plan = plan_query(state["question"], k=state.get("k", DEFAULT_K))
         LOG.info("planned", extra={"plan": plan.rationale})
+        self._timer.step("plan", started, rationale=plan.rationale, k=plan.k, hops=plan.hops)
         return {"plan": plan}
 
     def _retrieve(self, state: AgentState) -> AgentState:
-        conn = self._conn
-        hits = retrieve(conn, state["principal_id"], state["plan"], self._embedder)
+        started = time.monotonic()
+        hits = retrieve(self._conn, state["principal_id"], state["plan"], self._embedder)
+        # Counted, not listed: the trace's own retrieval table holds the detail,
+        # and a step that repeated it would be one more thing to keep in sync.
+        self._timer.step("retrieve", started, hits=len(hits))
         return {"hits": hits}
 
     def _synthesize(self, state: AgentState) -> AgentState:
+        started = time.monotonic()
         hits = state.get("hits", [])
         plan = state["plan"]
 
         if not hits:
+            self._route_taken = "nothing_visible"
             # No model call. There is nothing to answer from, and inventing an
             # answer for someone whose access is the reason they got no hits is
             # exactly the failure this system exists to avoid.
+            self._timer.step("synthesize", started, model_called=False)
             return {"answer": Answer(question=state["question"], text=NOTHING_VISIBLE, plan=plan)}
 
         request = CompletionRequest(
@@ -239,6 +254,14 @@ class Agent:
 
         completion = self._provider.complete(request)
         text = completion.text.strip()
+        self._timer.step(
+            "synthesize",
+            started,
+            model_called=True,
+            model=completion.model,
+            refused=completion.refused,
+            tokens=completion.usage.total,
+        )
 
         if completion.refused:
             LOG.warning("the model declined to answer", extra={"question": state["question"]})
@@ -275,8 +298,10 @@ class Agent:
         something the asker could see. None of them fall back to acting on a
         partial understanding.
         """
+        started = time.monotonic()
         hits = state["hits"]
         question = state["question"]
+        self._route_taken = "propose"
 
         request = CompletionRequest(
             system=propose_system_prompt(),
@@ -296,6 +321,9 @@ class Agent:
 
         if raw is None or checked is None:
             LOG.info("no action proposed", extra={"question": question})
+            self._timer.step(
+                "propose", started, proposed=False, model=completion.model, reason="declined"
+            )
             return {
                 "answer": Answer(
                     question=question,
@@ -319,6 +347,15 @@ class Agent:
             payload=payload,
             risk_class=risk_class,
             summary=summary,
+        )
+        self._timer.step(
+            "propose",
+            started,
+            proposed=True,
+            model=completion.model,
+            action_type=action_type,
+            action_id=str(proposal.id),
+            risk_class=risk_class,
         )
 
         return {
@@ -369,17 +406,41 @@ class Agent:
     # -- entry point --------------------------------------------------------
 
     def answer(
-        self, conn: Connection, principal_id: UUID, question: str, *, k: int = DEFAULT_K
+        self,
+        conn: Connection,
+        principal_id: UUID,
+        question: str,
+        *,
+        k: int = DEFAULT_K,
+        trace: bool = True,
     ) -> Answer:
-        """Answer one question as one principal."""
+        """Answer one question as one principal, and record what it did."""
         self._conn = conn
+        self._timer = StepTimer()
+        self._last_request = None
+        self._route_taken = "synthesize"
+        trace_id = new_trace_id()
         state: AgentState = {"question": question, "principal_id": principal_id, "k": k}
-        final: AgentState = self._graph.invoke(state)
-        answer = final["answer"]
+
+        try:
+            final: AgentState = self._graph.invoke(state)
+        except ProviderError as exc:
+            # A failed query is the one most worth being able to look at
+            # afterwards, so it gets a trace of its own before the error goes on
+            # to whoever called.
+            if trace:
+                record(conn, principal_id, self._failed_trace(trace_id, question, exc))
+            raise
+
+        answer = final["answer"].model_copy(update={"trace_id": trace_id})
+        if trace:
+            record(conn, principal_id, self._trace(trace_id, answer))
+
         LOG.info(
             "answered",
             extra={
                 "principal_id": str(principal_id),
+                "trace_id": str(trace_id),
                 "hits": len(answer.hits),
                 "citations": len(answer.citations),
                 "refused": answer.refused,
@@ -388,8 +449,58 @@ class Agent:
         )
         return answer
 
+    # -- trace ---------------------------------------------------------------
+
+    def _trace(self, trace_id: UUID, answer: Answer) -> Trace:
+        """Assemble the record. Entity ids and hashes, never content."""
+        cited = set(answer.cited_entity_ids)
+        return Trace(
+            id=trace_id,
+            question=answer.question,
+            plan={} if answer.plan is None else answer.plan.model_dump(),
+            route=self._route_taken,
+            steps=tuple(self._timer.steps),
+            system_prompt=None if self._last_request is None else self._last_request.system,
+            model=answer.model or None,
+            provider=self._provider.name,
+            input_tokens=answer.usage.input_tokens,
+            output_tokens=answer.usage.output_tokens,
+            answer=answer.text,
+            citations=answer.cited_entity_ids,
+            refused=answer.refused,
+            action_id=None if answer.proposal is None else answer.proposal.id,
+            duration_ms=self._timer.total_ms,
+            retrievals=tuple(
+                TraceRetrieval(
+                    rank=rank,
+                    chunk_id=hit.chunk_id,
+                    entity_id=hit.entity_id,
+                    entity_type=hit.entity_type,
+                    entity_title=hit.entity_title,
+                    content_hash=content_hash(hit.content),
+                    score=hit.score,
+                    retrieval_modes=hit.retrieval_modes,
+                    cited=hit.entity_id in cited,
+                )
+                for rank, hit in enumerate(answer.hits, start=1)
+            ),
+        )
+
+    def _failed_trace(self, trace_id: UUID, question: str, exc: Exception) -> Trace:
+        return Trace(
+            id=trace_id,
+            question=question,
+            plan={},
+            route="error",
+            steps=tuple(self._timer.steps),
+            system_prompt=None if self._last_request is None else self._last_request.system,
+            provider=self._provider.name,
+            error=f"{type(exc).__name__}: {exc}",
+            duration_ms=self._timer.total_ms,
+        )
+
     @property
     def last_request(self) -> CompletionRequest | None:
-        """The most recent prompt. What P1-AGT-4 stores and the security story
+        """The most recent prompt. What the trace stores and the security story
         rests on: the only egress is this, and it is inspectable."""
-        return getattr(self, "_last_request", None)
+        return self._last_request

@@ -47,6 +47,11 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "memory_scopes": NONE,
         "memory_notes": NONE,
         "schema_migrations": NONE,
+        # Traces belong to the agent. Sync has no reason to read what anyone
+        # asked, and giving it one would make the trace log a second place to
+        # go looking for content.
+        "query_traces": NONE,
+        "trace_retrievals": NONE,
     },
     "hippo_resolver": {
         "raw_records": READ,
@@ -65,9 +70,15 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "actions": NONE,
         "memory_notes": NONE,
         "schema_migrations": NONE,
+        "query_traces": NONE,
+        "trace_retrievals": NONE,
     },
     "hippo_agent": {
         "actions": frozenset({"INSERT"}),
+        # Write freely, read only your own — and reading goes through
+        # my_trace()/my_traces(), never a SELECT.
+        "query_traces": frozenset({"INSERT"}),
+        "trace_retrievals": frozenset({"INSERT"}),
         # The agent proposes into actions. It does not schedule work.
         "jobs": NONE,
         "acl_source_grants": NONE,
@@ -338,7 +349,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
 @pytest.mark.parametrize(
     ("role", "expected"),
     [
-        ("hippo_agent", ["visible_chunks"]),
+        ("hippo_agent", ["my_trace", "my_traces", "visible_chunks"]),
         ("hippo_sync", ["project_acl_grants"]),
         ("hippo_resolver", []),
     ],
