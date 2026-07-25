@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -280,3 +281,103 @@ def test_network_failures_are_transient() -> None:
 
     with pytest.raises(TransientSourceError):
         _http(handler).get("project/search")
+
+
+# ---------------------------------------------------------------------------
+# The write verbs (P1-SYNC-5). Still no live call: httpx.MockTransport answers.
+# ---------------------------------------------------------------------------
+
+
+def test_a_post_carries_the_body_and_returns_the_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert json.loads(request.content) == {"body": "hello"}
+        return httpx.Response(201, json={"id": "10100"})
+
+    assert _http(handler).post("issue/ACME-1/comment", {"body": "hello"}) == {"id": "10100"}
+
+
+def test_a_delete_sends_no_body() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        return httpx.Response(204)
+
+    _http(handler).delete("issue/ACME-1/comment/10100")
+
+    assert seen == ["DELETE"]
+
+
+def test_an_empty_response_is_not_a_parse_error() -> None:
+    """Jira answers 204 on a delete and empty on a transition. Trying to decode
+    that as JSON would turn a success into an exception."""
+    transport = _http(lambda request: httpx.Response(204))
+
+    assert transport.post("issue/ACME-1/transitions", {"transition": {"id": "21"}}) is None
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_a_write_that_will_not_start_working_is_permanent(status: int) -> None:
+    """One error taxonomy for every verb. A write path with its own idea of
+    which failures are retryable retries a 403 forever, and for an approved
+    action that means a human's decision quietly evaporating."""
+    with pytest.raises(PermanentSourceError):
+        _http(lambda request: httpx.Response(status, json={})).post("issue/ACME-1/comment", {})
+
+
+def test_a_write_that_might_work_later_is_transient() -> None:
+    with pytest.raises(TransientSourceError):
+        _http(lambda request: httpx.Response(503, json={})).post("issue/ACME-1/comment", {})
+
+
+def test_a_rate_limited_write_carries_the_hint() -> None:
+    transport = _http(lambda request: httpx.Response(429, headers={"Retry-After": "30"}, json={}))
+
+    with pytest.raises(RateLimitedError) as caught:
+        transport.post("issue/ACME-1/comment", {})
+
+    assert caught.value.retry_after == 30.0
+
+
+def test_a_dropped_write_connection_is_transient() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host")
+
+    with pytest.raises(TransientSourceError):
+        _http(handler).delete("issue/ACME-1/comment/1")
+
+
+def test_the_error_names_the_verb() -> None:
+    """A log line saying 'ACME-1: HTTP 403' does not say whether the read or
+    the write was refused."""
+    with pytest.raises(PermanentSourceError, match="POST"):
+        _http(lambda request: httpx.Response(403, json={})).post("issue/ACME-1/comment", {})
+
+
+def test_the_fixture_refuses_a_write_it_does_not_model(tmp_path: Path) -> None:
+    transport = FixtureTransport(tmp_path)
+
+    with pytest.raises(PermanentSourceError, match="no recorded write"):
+        transport.post("issue/ACME-1/attachments", {})
+
+
+def test_a_transitioned_issue_reads_back_with_its_new_status() -> None:
+    """The fixture stays coherent with its own writes, so a second capture sees
+    what the first write did rather than the file on disk."""
+    transport = FixtureTransport(FIXTURES)
+    transport.post("issue/ACME-1/transitions", {"transition": {"id": "21", "name": "Done"}})
+
+    body = transport.get("issue/ACME-1")
+
+    assert body["fields"]["status"]["name"] == "Done"
+
+
+def test_the_fixture_has_no_status_for_an_unknown_issue(tmp_path: Path) -> None:
+    """Every transition is on offer when nothing is known, which is the safe
+    direction for a fixture: it cannot hide a missing one."""
+    transport = FixtureTransport(tmp_path)
+
+    offered = transport.get("issue/NOSUCH-1/transitions")
+
+    assert len(offered["transitions"]) == len(FixtureTransport.STATUSES)

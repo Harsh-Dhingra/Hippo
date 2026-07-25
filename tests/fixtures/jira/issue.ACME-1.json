@@ -1,0 +1,21 @@
+{
+  "id": "1",
+  "key": "ACME-1",
+  "fields": {
+    "project": {
+      "key": "ACME",
+      "name": "Acme Renewal"
+    },
+    "summary": "Acme renewal blocked on legal review",
+    "status": {
+      "name": "In Progress"
+    },
+    "assignee": {
+      "accountId": "u-alice"
+    },
+    "reporter": {
+      "accountId": "u-bob"
+    },
+    "description": "Legal have flagged the liability cap. Nothing ships until that clause is agreed."
+  }
+}

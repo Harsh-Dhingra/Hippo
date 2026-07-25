@@ -30,6 +30,8 @@ from sync.worker import (
     schedule_tick,
     token_for,
 )
+from sync.writeback import JOB_KIND as ACTION_KIND
+from sync.writeback import ROLLBACK_KIND
 
 pytestmark = pytest.mark.requires_db
 
@@ -268,10 +270,12 @@ def test_a_custom_cadence_is_honoured(migrated: Connection, slack_connector: UUI
 # ---------------------------------------------------------------------------
 
 
-def test_the_worker_handles_both_kinds(migrated: Connection) -> None:
+def test_the_worker_handles_every_kind_it_owns(migrated: Connection) -> None:
+    """Syncing, scheduling, and the write-back this process is the only one
+    credentialled to perform."""
     table = handlers("postgresql://unused")
 
-    assert set(table) == {JOB_KIND, SCHEDULE_KIND}
+    assert set(table) == {JOB_KIND, SCHEDULE_KIND, ACTION_KIND, ROLLBACK_KIND}
 
 
 def test_a_schedule_job_runs_a_tick(
@@ -336,7 +340,7 @@ def test_the_worker_leases_longer_than_the_slowest_stream(migrated: Connection) 
 
     worker = build_worker(Settings(database_url="postgresql://unused"))
 
-    assert set(worker.kinds) == {JOB_KIND, SCHEDULE_KIND}
+    assert set(worker.kinds) == {JOB_KIND, SCHEDULE_KIND, ACTION_KIND, ROLLBACK_KIND}
 
 
 def test_a_stream_job_without_a_credential_fails_the_job(

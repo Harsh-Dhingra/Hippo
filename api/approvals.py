@@ -30,12 +30,15 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from core.db import Connection
+from core.jobs import enqueue
+from sync.writeback import ROLLBACK_KIND
 
 LOG = logging.getLogger("hippo.api.approvals")
 
 PENDING = "pending"
 APPROVED = "approved"
 DECLINED = "declined"
+EXECUTED = "executed"
 
 
 class ActionNotFoundError(Exception):
@@ -68,6 +71,7 @@ class Action(BaseModel):
     approved_by: UUID | None
     declined_by: UUID | None
     executed_at: Any | None
+    rolled_back_by: UUID | None
     error: str | None
     created_at: Any
 
@@ -75,7 +79,7 @@ class Action(BaseModel):
 _SELECT = (
     "SELECT a.id, a.action_type, a.status, a.risk_class, a.payload, a.target_entity, "
     "       e.title, a.connector_id, c.kind, a.requested_by, a.approved_by, a.declined_by, "
-    "       a.executed_at, a.error, a.created_at "
+    "       a.executed_at, a.rolled_back_by, a.error, a.created_at "
     "FROM actions a "
     "JOIN connectors c ON c.id = a.connector_id "
     "LEFT JOIN entities e ON e.id = a.target_entity "
@@ -97,8 +101,9 @@ def _row(row: Any) -> Action:
         approved_by=None if row[10] is None else UUID(str(row[10])),
         declined_by=None if row[11] is None else UUID(str(row[11])),
         executed_at=row[12],
-        error=row[13],
-        created_at=row[14],
+        rolled_back_by=None if row[13] is None else UUID(str(row[13])),
+        error=row[14],
+        created_at=row[15],
     )
 
 
@@ -174,6 +179,33 @@ def decline(conn: Connection, principal_id: UUID, action_id: UUID) -> Action:
 
     LOG.info("action declined", extra={"action_id": str(action_id)})
     return get_action(conn, principal_id, action_id)
+
+
+def request_rollback(conn: Connection, principal_id: UUID, action_id: UUID) -> Action:
+    """Ask for an executed action to be undone.
+
+    Records the request; the sync worker performs it, because it is the only
+    component holding a Jira credential. The status does not move here for the
+    same reason approval does not execute: this process cannot know whether the
+    undo succeeded, and a status that claimed otherwise would send someone
+    looking for a change that is still live.
+    """
+    action = get_action(conn, principal_id, action_id)
+    if action.status != EXECUTED:
+        raise ActionConflictError(f"action is {action.status}, not executed")
+
+    enqueue(
+        conn,
+        ROLLBACK_KIND,
+        payload={"action_id": str(action_id), "requested_by": str(principal_id)},
+        dedupe_key=f"{ROLLBACK_KIND}:{action_id}",
+        priority=10,
+    )
+    LOG.info(
+        "rollback requested",
+        extra={"action_id": str(action_id), "requested_by": str(principal_id)},
+    )
+    return action
 
 
 def _explain_failure(conn: Connection, principal_id: UUID, action_id: UUID) -> None:

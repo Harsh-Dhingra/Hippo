@@ -29,17 +29,28 @@ from sync.connectors.jira.transport import JiraTransport
 from sync.connectors.sdk import (
     DONE,
     AclRecord,
+    ConnectorError,
     ContentRecord,
     Cursor,
     IdentityRecord,
+    InverseCaptureError,
     Page,
+    PermanentSourceError,
     SourceRef,
+    WritebackReceipt,
+    WritebackRequest,
     is_terminal,
 )
 
 PROJECT = "jira.project"
 ISSUE = "jira.issue"
 COMMENT = "jira.comment"
+
+# The two things this connector can be asked to do. Same strings as the agent's
+# action vocabulary (agent/actions.py) because they name the same operations —
+# one closed set, agreed at both ends, rather than a mapping table to drift.
+COMMENT_ACTION = "jira.comment"
+TRANSITION_ACTION = "jira.transition"
 
 USER_ACTOR = "atlassian-user-role-actor"
 GROUP_ACTOR = "atlassian-group-role-actor"
@@ -341,3 +352,130 @@ class JiraConnector:
                 return
 
         yield Page(records=(), cursor={"project": index, DONE: True}, has_more=False)
+
+    # -- write-back (P1-SYNC-5) ---------------------------------------------
+    #
+    # Three methods rather than one, because CLAUDE.md rule 3 is a shape and
+    # not a convention: there is no way to reach execute() without a separate,
+    # earlier call that returns the inverse. The SDK's perform_writeback() is
+    # what enforces the ordering, so no caller has to remember it.
+    #
+    # The two action types differ in an interesting way. A transition's inverse
+    # is fully knowable beforehand — it is the status the issue has right now,
+    # and reading it is the whole reason capture happens first. A comment's is
+    # not: the inverse of creating something is deleting it, and the id does
+    # not exist until the create returns. So capture records the plan and the
+    # pre-state it can see, and the executor folds the receipt into the stored
+    # inverse afterwards. Rule 3 is still satisfied before execution, because
+    # what capture proves is that a rollback path exists and that the target is
+    # readable — not that every field of it is already known.
+
+    def capture_inverse(self, request: WritebackRequest) -> dict[str, Any]:
+        """Read the target before changing it. Raise rather than guess."""
+        issue = self._issue_key(request)
+        if request.action_type == COMMENT_ACTION:
+            # Confirms the issue exists and is readable, which is what makes
+            # the delete a rollback rather than a hope.
+            self._require_issue(issue)
+            return {"op": "delete_comment", "issue": issue}
+        if request.action_type == TRANSITION_ACTION:
+            fields = self._require_issue(issue)
+            status = (fields.get("status") or {}).get("name")
+            if not status:
+                raise InverseCaptureError(f"{issue}: no current status to return to")
+            return {"op": "transition", "issue": issue, "to_status": str(status)}
+        raise PermanentSourceError(f"jira cannot perform {request.action_type!r}")
+
+    def execute(self, request: WritebackRequest) -> WritebackReceipt:
+        issue = self._issue_key(request)
+        if request.action_type == COMMENT_ACTION:
+            body = str(request.payload.get("body") or "")
+            if not body:
+                raise PermanentSourceError("a comment needs a body")
+            result = self._transport.post(f"issue/{issue}/comment", {"body": body})
+            created = None if not isinstance(result, Mapping) else result.get("id")
+            return WritebackReceipt(
+                external_id=None if created is None else str(created),
+                result=dict(result) if isinstance(result, Mapping) else {},
+            )
+        if request.action_type == TRANSITION_ACTION:
+            status = str(request.payload.get("to_status") or "")
+            if not status:
+                raise PermanentSourceError("a transition needs a target status")
+            self._transition(issue, status)
+            return WritebackReceipt(result={"to_status": status})
+        raise PermanentSourceError(f"jira cannot perform {request.action_type!r}")
+
+    def rollback(self, request: WritebackRequest, inverse: Mapping[str, Any]) -> None:
+        """Put the target back the way capture_inverse found it."""
+        op = str(inverse.get("op") or "")
+        issue = str(inverse.get("issue") or "")
+        if op == "delete_comment":
+            comment_id = inverse.get("created_id")
+            if not comment_id:
+                # The executor folds the receipt in after a successful create.
+                # Its absence means we do not know what to delete, and deleting
+                # a guessed comment is worse than refusing.
+                raise InverseCaptureError(
+                    f"{issue}: no comment id recorded, so there is nothing safe to delete"
+                )
+            self._transport.delete(f"issue/{issue}/comment/{comment_id}")
+            return
+        if op == "transition":
+            self._transition(issue, str(inverse.get("to_status") or ""))
+            return
+        raise PermanentSourceError(f"unknown inverse operation {op!r}")
+
+    # -- write-back helpers -------------------------------------------------
+
+    def _issue_key(self, request: WritebackRequest) -> str:
+        if request.target is None or not request.target.source_id:
+            raise PermanentSourceError("a jira write-back needs a target issue")
+        # Comments are addressed as ISSUE:comment_id elsewhere; the issue key is
+        # the part before the colon either way.
+        return request.target.source_id.partition(":")[0]
+
+    def _require_issue(self, issue: str) -> dict[str, Any]:
+        """The issue's fields, or InverseCaptureError.
+
+        Rule 3 again: a target that cannot be read is a target with no proven
+        rollback path, and that fails the action rather than proceeding.
+        """
+        try:
+            body = self._get(f"issue/{issue}")
+        except ConnectorError as exc:
+            raise InverseCaptureError(f"{issue}: could not read the target: {exc}") from exc
+        if not isinstance(body, Mapping):
+            raise InverseCaptureError(f"{issue}: unreadable response")
+        fields = body.get("fields")
+        if not isinstance(fields, Mapping):
+            raise InverseCaptureError(f"{issue}: no fields in the response")
+        return dict(fields)
+
+    def _transition(self, issue: str, status: str) -> None:
+        """Move an issue by status name.
+
+        Jira transitions are identified by id and the ids differ per workflow,
+        so the name is resolved against what the issue can actually do right
+        now. A name that is not an available transition fails loudly: silently
+        doing nothing would report success for a status change that did not
+        happen.
+        """
+        if not status:
+            raise PermanentSourceError(f"{issue}: no target status")
+        available = self._get(f"issue/{issue}/transitions")
+        transitions = available.get("transitions", []) if isinstance(available, Mapping) else []
+        for transition in transitions:
+            name = str((transition.get("to") or {}).get("name") or transition.get("name") or "")
+            if name.casefold() == status.casefold():
+                self._transport.post(
+                    f"issue/{issue}/transitions",
+                    {"transition": {"id": str(transition.get("id")), "name": status}},
+                )
+                return
+        offered = ", ".join(
+            str((t.get("to") or {}).get("name") or t.get("name") or "?") for t in transitions
+        )
+        raise PermanentSourceError(
+            f"{issue}: no transition to {status!r}; available: {offered or 'none'}"
+        )

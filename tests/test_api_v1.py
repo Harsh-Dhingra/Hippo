@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -546,6 +546,100 @@ def test_the_api_cannot_create_an_action_of_its_own(client: TestClient, world: C
     )
 
 
+def test_the_full_demo_loop(client: TestClient, world: Connection, model: ScriptedModel) -> None:
+    """ARCHITECTURE §12 point 3, end to end over HTTP.
+
+    Ask, approve, execute, roll back. The execution and the undo run through
+    the write-back executor with a fixture Jira, because CI does not call an
+    API — but everything between the HTTP boundary and the connector is the
+    code that ships.
+    """
+    from pathlib import Path as _Path
+
+    from sync.connectors.jira import FixtureTransport as _Fixtures
+    from sync.connectors.jira import JiraConnector as _Jira
+    from sync.writeback import execute_action, rollback_action
+
+    auth_headers = headers(client, ALICE_EMAIL)
+    proposal = propose(client, world, model)["proposal"]
+    assert proposal["status"] == "pending"
+
+    approved = client.post(f"/api/v1/actions/{proposal['id']}/approve", headers=auth_headers)
+    assert approved.json()["status"] == "approved"
+
+    # The sync worker's half. It holds the Jira credential; the API does not.
+    transport = _Fixtures(_Path(__file__).resolve().parent / "fixtures" / "jira")
+    factory = lambda _conn, _id: _Jira(transport)  # noqa: E731
+    world.commit()
+    assert execute_action(world, UUID(proposal["id"]), factory) == "executed"
+    world.commit()
+    assert transport.writes, "the comment reached Jira"
+
+    executed = client.get(f"/api/v1/actions/{proposal['id']}", headers=auth_headers)
+    assert executed.json()["status"] == "executed"
+
+    requested = client.post(f"/api/v1/actions/{proposal['id']}/rollback", headers=auth_headers)
+    assert requested.status_code == 200
+
+    principal_id = auth.find_principal_for(world, ALICE_EMAIL)
+    assert principal_id is not None
+    assert rollback_action(world, UUID(proposal["id"]), principal_id, factory) == "rolled_back"
+    world.commit()
+    assert transport.deletes, "and the comment is gone again"
+
+    final = client.get(f"/api/v1/actions/{proposal['id']}", headers=auth_headers)
+    assert final.json()["status"] == "rolled_back"
+    assert final.json()["rolled_back_by"] is not None
+
+
+def test_requesting_a_rollback_enqueues_the_work(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    """The API records the request; the worker performs it. A status that moved
+    here would send someone looking for a change that is still live."""
+    proposal = propose(client, world, model)["proposal"]
+    auth_headers = headers(client, ALICE_EMAIL)
+    client.post(f"/api/v1/actions/{proposal['id']}/approve", headers=auth_headers)
+    world.execute(
+        "UPDATE actions SET status = 'executed', executed_at = now(), "
+        "inverse_payload = '{}' WHERE id = %s",
+        (proposal["id"],),
+    )
+    world.commit()
+
+    response = client.post(f"/api/v1/actions/{proposal['id']}/rollback", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "executed", "not yet undone"
+    with world.cursor() as cur:
+        cur.execute("SELECT count(*) FROM jobs WHERE kind = 'action.rollback'")
+        assert cur.fetchone() == (1,)
+
+
+def test_only_an_executed_action_can_be_rolled_back(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    proposal = propose(client, world, model)["proposal"]
+
+    response = client.post(
+        f"/api/v1/actions/{proposal['id']}/rollback", headers=headers(client, ALICE_EMAIL)
+    )
+
+    assert response.status_code == 409
+
+
+def test_you_cannot_roll_back_someone_elses_action(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    proposal = propose(client, world, model)["proposal"]
+
+    response = client.post(
+        f"/api/v1/actions/{proposal['id']}/rollback", headers=headers(client, CAROL_EMAIL)
+    )
+
+    assert response.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Traces. §12 point 4.
 # ---------------------------------------------------------------------------
@@ -625,6 +719,7 @@ def test_the_openapi_document_covers_every_v1_route(client: TestClient) -> None:
         "/api/v1/actions/{action_id}",
         "/api/v1/actions/{action_id}/approve",
         "/api/v1/actions/{action_id}/decline",
+        "/api/v1/actions/{action_id}/rollback",
         "/api/v1/traces",
         "/api/v1/traces/{trace_id}",
         "/healthz",

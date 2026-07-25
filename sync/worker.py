@@ -39,14 +39,22 @@ from uuid import UUID
 
 from core.config import Settings
 from core.db import Connection, connect
-from core.jobs import Handler, Job, Worker, WorkerConfig
+from core.jobs import Handler, Job, Worker, WorkerConfig, enqueue
 from sync.connectors.jira import HttpTransport as JiraHttp
 from sync.connectors.jira import JiraConnector
-from sync.connectors.sdk import PermanentSourceError, ReadConnector
+from sync.connectors.sdk import PermanentSourceError, ReadConnector, WritebackConnector
 from sync.connectors.slack import HttpTransport as SlackHttp
 from sync.connectors.slack import SlackConnector
 from sync.runtime import SyncRuntime
 from sync.scheduler import JOB_KIND, Cadence, acl_staleness, enqueue_due
+from sync.writeback import JOB_KIND as ACTION_KIND
+from sync.writeback import (
+    ROLLBACK_KIND,
+    due_actions,
+    execute_action,
+    reap_stuck_executions,
+    rollback_action,
+)
 
 LOG = logging.getLogger("hippo.sync.worker")
 
@@ -101,6 +109,23 @@ def build_connector(conn: Connection, connector_id: UUID) -> ReadConnector:
     raise PermanentSourceError(f"no connector implementation for kind {kind!r}")
 
 
+def build_writeback_connector(conn: Connection, connector_id: UUID) -> WritebackConnector:
+    """The write-back connector for one row, or a refusal.
+
+    Separate from build_connector because being able to read is not being able
+    to write. Slack is read-only in v0 and SlackConnector has no write-back
+    methods at all, so asking it to perform an action has to fail here — with a
+    message naming the connector — rather than at an AttributeError somewhere
+    inside the executor.
+    """
+    connector = build_connector(conn, connector_id)
+    if not isinstance(connector, JiraConnector):
+        raise PermanentSourceError(
+            f"connector {connector_id} ({type(connector).__name__}) cannot perform write-backs"
+        )
+    return connector
+
+
 def sync_stream(conn: Connection, job: Job) -> None:
     """Handle one `sync.stream` job."""
     connector_id = UUID(str(job.payload["connector_id"]))
@@ -126,6 +151,18 @@ def schedule_tick(conn: Connection, cadence: Cadence | None = None) -> int:
     precisely the one whose syncs are failing.
     """
     enqueued = enqueue_due(conn, cadence)
+    # Approved actions are enqueued on the same tick. A human clicking approve
+    # should not wait for a sync interval, and the queue is where the ordering
+    # against everything else gets decided anyway.
+    for action_id in due_actions(conn):
+        enqueue(
+            conn,
+            ACTION_KIND,
+            payload={"action_id": str(action_id)},
+            dedupe_key=f"{ACTION_KIND}:{action_id}",
+            priority=5,
+        )
+    reap_stuck_executions(conn)
     stale = [item for item in acl_staleness(conn) if not item.within_target]
     if stale:
         LOG.warning(
@@ -152,7 +189,25 @@ def handlers(dsn: str, cadence: Cadence | None = None) -> dict[str, Handler]:
         with connect(dsn) as conn:
             schedule_tick(conn, cadence)
 
-    return {JOB_KIND: stream, SCHEDULE_KIND: schedule}
+    def execute(job: Job) -> None:
+        with connect(dsn) as conn:
+            execute_action(conn, UUID(str(job.payload["action_id"])), build_writeback_connector)
+
+    def rollback(job: Job) -> None:
+        with connect(dsn) as conn:
+            rollback_action(
+                conn,
+                UUID(str(job.payload["action_id"])),
+                UUID(str(job.payload["requested_by"])),
+                build_writeback_connector,
+            )
+
+    return {
+        JOB_KIND: stream,
+        SCHEDULE_KIND: schedule,
+        ACTION_KIND: execute,
+        ROLLBACK_KIND: rollback,
+    }
 
 
 def build_worker(settings: Settings, cadence: Cadence | None = None) -> Worker:

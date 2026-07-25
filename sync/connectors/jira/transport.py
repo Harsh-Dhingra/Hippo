@@ -30,9 +30,19 @@ API_ROOT = "/rest/api/3"
 
 
 class JiraTransport(Protocol):
-    """One Jira REST call."""
+    """Jira REST calls.
+
+    The write verbs arrived with P1-SYNC-5. They are on the same protocol as
+    `get` rather than a separate one because a connector that can write is
+    already a connector that has to read the state it is about to change: rule
+    3 makes inverse capture a precondition of execution, and capture is a GET.
+    """
 
     def get(self, path: str, params: Mapping[str, Any] | None = None) -> Any: ...
+
+    def post(self, path: str, body: Mapping[str, Any]) -> Any: ...
+
+    def delete(self, path: str) -> None: ...
 
 
 # The field a Jira envelope puts its items in. Jira uses a different one per
@@ -59,6 +69,12 @@ class FixtureTransport:
     def __init__(self, root: Path) -> None:
         self._root = root
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.writes: list[tuple[str, dict[str, Any]]] = []
+        self.deletes: list[str] = []
+        # Transitions applied since this transport was built, so a rollback test
+        # can observe the issue going back where it started.
+        self.statuses: dict[str, str] = {}
+        self._next_comment_id = 10_000
 
     @staticmethod
     def filename(path: str, params: Mapping[str, Any] | None = None) -> str:
@@ -69,9 +85,36 @@ class FixtureTransport:
             parts.append(str(params["groupId"]))
         return ".".join(parts) + ".json"
 
+    # Jira offers different transitions depending on where an issue currently
+    # is, so a static fixture cannot answer this: after a transition to Done,
+    # the way back to In Progress has to be on offer or a rollback is
+    # untestable. Derived from the same mutable status the writes update.
+    STATUSES = ("To Do", "In Progress", "Done")
+
+    def _current_status(self, issue: str) -> str:
+        if issue in self.statuses:
+            return self.statuses[issue]
+        file = self._root / f"issue.{issue}.json"
+        if not file.is_file():
+            return ""
+        fields = json.loads(file.read_text(encoding="utf-8")).get("fields", {})
+        return str((fields.get("status") or {}).get("name") or "")
+
     def get(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
         params = dict(params or {})
         self.calls.append((path, params))
+
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "issue" and parts[2] == "transitions":
+            current = self._current_status(parts[1])
+            return {
+                "transitions": [
+                    {"id": str(20 + index), "to": {"name": name}}
+                    for index, name in enumerate(self.STATUSES)
+                    if name != current
+                ]
+            }
+
         file = self._root / self.filename(path, params)
         if not file.is_file():
             msg = f"no recorded response for {path} (looked for {file.name})"
@@ -98,8 +141,37 @@ class FixtureTransport:
                     "isLast": start_at + len(window) >= len(items),
                 }
 
+        # An issue read reflects transitions applied since this transport was
+        # built, so a second capture_inverse sees what the first write did.
+        if len(parts) == 2 and parts[0] == "issue" and isinstance(body, dict):
+            applied = self.statuses.get(parts[1])
+            if applied is not None:
+                fields = {**dict(body.get("fields") or {}), "status": {"name": applied}}
+                return {**body, "fields": fields}
+
         # Role listings and the like are not paginated at all.
         return body
+
+    def post(self, path: str, body: Mapping[str, Any]) -> Any:
+        """Record the write, and answer the way Jira does.
+
+        Enough of a simulation to test rollback rather than just execution:
+        posting a comment yields an id that the matching delete then has to
+        name, and a transition changes what the next capture_inverse reads.
+        """
+        self.writes.append((path, dict(body)))
+        if path.endswith("/comment"):
+            self._next_comment_id += 1
+            return {"id": str(self._next_comment_id), "body": body.get("body")}
+        if path.endswith("/transitions"):
+            issue = path.split("/")[1]
+            self.statuses[issue] = str(dict(body).get("transition", {}).get("name", ""))
+            return {}
+        msg = f"no recorded write for {path}"
+        raise PermanentSourceError(msg)
+
+    def delete(self, path: str) -> None:
+        self.deletes.append(path)
 
 
 class HttpTransport:
@@ -120,28 +192,60 @@ class HttpTransport:
         self._client = client if client is not None else httpx.Client(timeout=timeout)
 
     def get(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
+        return self._request("GET", path, params=params)
+
+    def post(self, path: str, body: Mapping[str, Any]) -> Any:
+        return self._request("POST", path, json=dict(body))
+
+    def delete(self, path: str) -> None:
+        self._request("DELETE", path)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        json: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """One place that maps HTTP status to this project's error taxonomy.
+
+        Shared by every verb on purpose. A write path with its own idea of
+        which failures are retryable is a write path that retries a 403 forever
+        or gives up on a 502 — and for an approved action, the difference is
+        whether a human's decision quietly evaporates.
+        """
         url = f"{self._base_url}{API_ROOT}/{path.strip('/')}"
         try:
-            response = self._client.get(
+            response = self._client.request(
+                method,
                 url,
-                params={k: v for k, v in (params or {}).items() if v is not None},
+                params=None
+                if params is None
+                else {k: v for k, v in params.items() if v is not None},
+                json=json,
                 headers={"Authorization": self._auth_header, "Accept": "application/json"},
             )
         except httpx.HTTPError as exc:
-            msg = f"{path}: {exc}"
+            msg = f"{method} {path}: {exc}"
             raise TransientSourceError(msg) from exc
 
         if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
-            raise RateLimitedError(f"{path}: rate limited", retry_after=_retry_after(response))
+            raise RateLimitedError(
+                f"{method} {path}: rate limited", retry_after=_retry_after(response)
+            )
         if response.status_code >= httpx.codes.INTERNAL_SERVER_ERROR:
-            msg = f"{path}: HTTP {response.status_code}"
+            msg = f"{method} {path}: HTTP {response.status_code}"
             raise TransientSourceError(msg)
         if response.status_code >= httpx.codes.BAD_REQUEST:
             # 401, 403 and 404 all mean this call will not start working on its
             # own. Retrying a permissions problem just delays the alert.
-            msg = f"{path}: HTTP {response.status_code}"
+            msg = f"{method} {path}: HTTP {response.status_code}"
             raise PermanentSourceError(msg)
 
+        # 204 on a delete, and Jira's transition endpoint answers empty too.
+        if not response.content:
+            return None
         return response.json()
 
 

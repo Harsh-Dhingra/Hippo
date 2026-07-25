@@ -1,0 +1,18 @@
+{
+  "id": "3",
+  "key": "PUB-1",
+  "fields": {
+    "project": {
+      "key": "PUB",
+      "name": "Public Docs"
+    },
+    "summary": "Publish the integration guide",
+    "status": {
+      "name": "Done"
+    },
+    "reporter": {
+      "accountId": "u-carol"
+    },
+    "description": null
+  }
+}

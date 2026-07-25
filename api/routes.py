@@ -139,6 +139,7 @@ class ActionResponse(BaseModel):
     requested_by: UUID
     approved_by: UUID | None
     declined_by: UUID | None
+    rolled_back_by: UUID | None
     error: str | None
     created_at: datetime
 
@@ -315,6 +316,20 @@ def build_router(db: ConnectionSource, agent: Callable[[Connection], Agent]) -> 
     )
     def decline_action(conn: Conn, principal_id: Principal, action_id: UUID) -> ActionResponse:
         return _translate(lambda: approvals.decline(conn, principal_id, action_id))
+
+    @router.post(
+        "/actions/{action_id}/rollback",
+        tags=["actions"],
+        summary="Undo an executed action",
+        description=(
+            "Requests the undo. The sync worker performs it using the inverse "
+            "captured before the action ran, and the status moves when it has "
+            "actually happened — a status that changed here would send someone "
+            "looking for a change that is still live in the source system."
+        ),
+    )
+    def rollback_action(conn: Conn, principal_id: Principal, action_id: UUID) -> ActionResponse:
+        return _translate(lambda: approvals.request_rollback(conn, principal_id, action_id))
 
     # -- traces ------------------------------------------------------------
 
