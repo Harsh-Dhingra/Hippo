@@ -146,6 +146,16 @@ Decision: resolver reads only `raw_records`, writes only graph tables. If resolu
 | 7 | Everything-consequential default | Risk-tiered auto-execution | After the approval UX and rollback are proven |
 | 8 | OIDC subject is the user identity; email only maps to principals | Email as the account key | SCIM lands (Phase 4) and group membership arrives with it |
 | 9 | Passwords stay alongside SSO | SSO-only once configured | Never — an install whose only way in is the IdP has none when the IdP is down |
+| 10 | Connectors are registered through entry points; capabilities are declared | `if kind ==` dispatch and `isinstance` checks | Never — both are unavailable for a class this process has never imported |
+| 11 | The write-back vocabulary is assembled from connectors | A literal in the agent | Never — a literal makes every third-party connector read-only |
+
+**On 10 and 11.** SDK v1 (P3-SDK-1). The vocabulary stays closed against
+content: `action_definitions()` reads the plugin registry, and the registry is
+populated by installed code and operator configuration, never by a synced
+payload. What changed is who writes the list. The built-in Slack and Jira
+connectors register through the same `hippo.connectors` entry-point group a
+contributed connector uses, so the discovery path is exercised on every start
+rather than only by strangers.
 
 **On 8.** The link from a login to a principal is an email match, because an
 email is the only thing connectors agree on. That makes email an authorisation

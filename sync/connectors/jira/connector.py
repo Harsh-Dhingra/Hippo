@@ -25,10 +25,12 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
+from sync.connectors.jira.actions import ACTIONS, COMMENT_ACTION, TRANSITION_ACTION
 from sync.connectors.jira.transport import JiraTransport
 from sync.connectors.sdk import (
     DONE,
     AclRecord,
+    Capabilities,
     ConnectorError,
     ContentRecord,
     Cursor,
@@ -49,8 +51,6 @@ COMMENT = "jira.comment"
 # The two things this connector can be asked to do. Same strings as the agent's
 # action vocabulary (agent/actions.py) because they name the same operations —
 # one closed set, agreed at both ends, rather than a mapping table to drift.
-COMMENT_ACTION = "jira.comment"
-TRANSITION_ACTION = "jira.transition"
 
 USER_ACTOR = "atlassian-user-role-actor"
 GROUP_ACTOR = "atlassian-group-role-actor"
@@ -69,6 +69,13 @@ class JiraConnector:
 
     kind = "jira"
     schema_version = "2026-07-01"
+
+    def capabilities(self) -> Capabilities:
+        return Capabilities(
+            kind=self.kind,
+            schema_version=self.schema_version,
+            actions=ACTIONS,
+        )
 
     def __init__(self, transport: JiraTransport, *, page_size: int = 50) -> None:
         self._transport = transport
@@ -121,7 +128,7 @@ class JiraConnector:
                 return groups
             start_at += len(values)
 
-    def identities(self, cursor: Cursor) -> Iterator[Page]:
+    def identities(self, cursor: Cursor) -> Iterator[Page[IdentityRecord]]:
         """Groups first, then users carrying their memberships."""
         if is_terminal(cursor):
             yield Page(records=(), cursor={"phase": "users", DONE: True}, has_more=False)
@@ -234,7 +241,7 @@ class JiraConnector:
                 return records
             start_at += len(comments)
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[ContentRecord]]:
         if is_terminal(cursor):
             yield Page(records=(), cursor={"phase": "issues", DONE: True}, has_more=False)
             return
@@ -329,7 +336,7 @@ class JiraConnector:
         # Deduplicated because one person can hold several roles.
         return sorted(set(principals))
 
-    def acls(self, cursor: Cursor) -> Iterator[Page]:
+    def acls(self, cursor: Cursor) -> Iterator[Page[AclRecord]]:
         """One page per project, because that is the unit Jira grants on."""
         projects = self._projects()
         index = int(cursor.get("project", 0))

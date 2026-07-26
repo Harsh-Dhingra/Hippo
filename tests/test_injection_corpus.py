@@ -26,7 +26,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from agent.actions import ACTIONS, parse_proposal, propose_system_prompt, wants_action
+from agent.actions import actions, parse_proposal, propose_system_prompt, wants_action
 from agent.links import load_directory
 from agent.loop import ANSWER_SYSTEM, Agent, render_sources
 from agent.providers.base import Completion, CompletionRequest, Usage
@@ -436,7 +436,7 @@ def test_the_proposal_prompt_offers_nothing_destructive() -> None:
     vocabulary cannot express."""
     catalogue = propose_system_prompt()
 
-    assert set(ACTIONS) == {"jira.comment", "jira.transition"}
+    assert set(actions()) == {"jira.comment", "jira.transition"}
     for verb in ("delete", "remove", "archive", "revoke", "invite"):
         assert verb not in catalogue.lower()
 

@@ -90,7 +90,7 @@ def test_acl_access_is_constrained() -> None:
 
 def test_a_page_defaults_to_empty_and_final() -> None:
     """An empty stream still yields a page, so the runtime gets a cursor."""
-    page = Page()
+    page: Page[Any] = Page()
     assert page.records == ()
     assert page.cursor == {}
     assert page.has_more is False

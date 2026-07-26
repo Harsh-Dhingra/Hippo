@@ -20,10 +20,12 @@ cannot read is not rejected by a check that a future contributor might forget
 to call; it is unrepresentable. The permission filter constrains the write path
 through the same one function it constrains the read path with.
 
-**The vocabulary is closed.** Two action types exist. There is no delete, so
-"delete ticket ACME-1" cannot be expressed however it is phrased, and an
-unrecognised type is dropped rather than passed through for someone downstream
-to interpret.
+**The vocabulary is closed.** There is no delete, so "delete ticket ACME-1"
+cannot be expressed however it is phrased, and an unrecognised type is dropped
+rather than passed through for someone downstream to interpret. Since SDK v1
+the list is assembled from what connectors declare rather than written here,
+which changes who writes it and not whether content can: the registry is
+populated by installed code and operator configuration, never by a payload.
 
 **Everything is consequential by default**, and in v0 nothing auto-approves at
 all (agent/policy.py). The row waits for a person.
@@ -43,11 +45,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agent.policy import RiskClass, RiskPolicy
 from agent.retrieval import Hit
 from core.db import Connection
+from sync.connectors.registry import action_definitions
+from sync.connectors.sdk import ActionDefinition
 
 LOG = logging.getLogger("hippo.agent.actions")
 
@@ -56,59 +60,24 @@ LOG = logging.getLogger("hippo.agent.actions")
 # ---------------------------------------------------------------------------
 
 
-class CommentPayload(BaseModel):
-    """jira.comment."""
+def actions() -> dict[str, ActionDefinition]:
+    """What may be proposed, assembled from what connectors declare.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    This was a literal here until SDK v1, which meant the agent could only
+    propose actions for connectors written in this repository: one shipped in
+    another package could read and never act, whatever it implemented.
 
-    body: str = Field(min_length=1, max_length=32_000)
+    **The vocabulary is still closed.** `action_definitions()` reads the plugin
+    registry, and the registry is populated by imports and entry points, never
+    by a synced payload. Content cannot add to this list; a person installing a
+    package can. That is the same guarantee THREAT-MODEL §4.2 rests on, with a
+    different author.
 
-
-class TransitionPayload(BaseModel):
-    """jira.transition."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    to_status: str = Field(min_length=1, max_length=200)
-
-
-class ActionSpec(BaseModel):
-    """One thing the agent is allowed to propose."""
-
-    model_config = ConfigDict(frozen=True)
-
-    action_type: str
-    description: str
-    # What the action may be aimed at, in source terms. A jira comment belongs
-    # on a jira issue; without this a proposal could name any retrieved chunk
-    # and the write-back would have to guess what to do with it.
-    targets: frozenset[str]
-    payload_schema: str
-
-    def validate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        model = _PAYLOADS[self.action_type]
-        return dict(model.model_validate(payload).model_dump())
-
-
-_PAYLOADS: dict[str, type[BaseModel]] = {
-    "jira.comment": CommentPayload,
-    "jira.transition": TransitionPayload,
-}
-
-ACTIONS: dict[str, ActionSpec] = {
-    "jira.comment": ActionSpec(
-        action_type="jira.comment",
-        description="Add a comment to a Jira issue.",
-        targets=frozenset({"jira.issue"}),
-        payload_schema='{"body": "the comment text"}',
-    ),
-    "jira.transition": ActionSpec(
-        action_type="jira.transition",
-        description="Move a Jira issue to another status.",
-        targets=frozenset({"jira.issue"}),
-        payload_schema='{"to_status": "the target status name"}',
-    ),
-}
+    Recomputed per call rather than cached at import, so a connector registered
+    after the agent was built is proposable without a restart — and so tests
+    can register one without reaching into module state.
+    """
+    return action_definitions()
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +153,7 @@ def propose_system_prompt() -> str:
     """
     catalogue = "\n".join(
         f"- {spec.action_type}: {spec.description} payload {spec.payload_schema}"
-        for spec in ACTIONS.values()
+        for spec in sorted(actions().values(), key=lambda spec: spec.action_type)
     )
     return (
         "You turn a request into at most one proposed action. You do not "
@@ -252,7 +221,7 @@ def build_proposal(
     case where continuing would mean writing to a production system on the
     strength of something not fully understood.
     """
-    spec = ACTIONS.get(raw.action_type)
+    spec = actions().get(raw.action_type)
     if spec is None:
         LOG.warning("dropped a proposal for an unknown action", extra={"action": raw.action_type})
         return None

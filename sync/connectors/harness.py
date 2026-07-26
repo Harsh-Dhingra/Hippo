@@ -21,7 +21,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sync.connectors.sdk import (
+    READ_STREAMS,
+    SDK_VERSION,
     AclRecord,
+    Capabilities,
     ContentRecord,
     Cursor,
     IdentityRecord,
@@ -31,10 +34,9 @@ from sync.connectors.sdk import (
     SourceRef,
     WritebackConnector,
     WritebackRequest,
+    compatible,
     perform_writeback,
 )
-
-READ_STREAMS = ("identities", "content", "acls")
 
 _EXPECTED_RECORD: dict[str, type[Any]] = {
     "identities": IdentityRecord,
@@ -97,10 +99,10 @@ def _identity_of(record: Any) -> tuple[str, ...]:
 
 
 def _drain(
-    stream: Callable[[Cursor], Iterator[Page]], cursor: Cursor
-) -> tuple[list[Page], Violation | None]:
+    stream: Callable[[Cursor], Iterator[Page[Any]]], cursor: Cursor
+) -> tuple[list[Page[Any]], Violation | None]:
     """Pull a stream to exhaustion, refusing to loop forever on a broken one."""
-    pages: list[Page] = []
+    pages: list[Page[Any]] = []
     iterator = stream(cursor)
     for page in iterator:
         pages.append(page)
@@ -130,7 +132,7 @@ def _drain(
 
 
 def _check_read_stream(
-    report: _Report, name: str, stream: Callable[[Cursor], Iterator[Page]]
+    report: _Report, name: str, stream: Callable[[Cursor], Iterator[Page[Any]]]
 ) -> None:
     pages, runaway = _drain(stream, {})
     if runaway is not None:
@@ -178,11 +180,11 @@ def _check_read_stream(
     _check_resume(report, name, stream, pages)
 
 
-def _all_records(pages: Sequence[Page]) -> list[Any]:
+def _all_records(pages: Sequence[Page[Any]]) -> list[Any]:
     return [record for page in pages for record in page.records]
 
 
-def _check_no_duplicates(report: _Report, name: str, pages: Sequence[Page]) -> None:
+def _check_no_duplicates(report: _Report, name: str, pages: Sequence[Page[Any]]) -> None:
     keys = [_identity_of(record) for record in _all_records(pages)]
     duplicates = sorted({key for key in keys if keys.count(key) > 1})
     if duplicates:
@@ -196,8 +198,8 @@ def _check_no_duplicates(report: _Report, name: str, pages: Sequence[Page]) -> N
 def _check_determinism(
     report: _Report,
     name: str,
-    stream: Callable[[Cursor], Iterator[Page]],
-    first_pass: Sequence[Page],
+    stream: Callable[[Cursor], Iterator[Page[Any]]],
+    first_pass: Sequence[Page[Any]],
 ) -> None:
     second_pass, runaway = _drain(stream, {})
     if runaway is not None:
@@ -218,8 +220,8 @@ def _check_determinism(
 def _check_resume(
     report: _Report,
     name: str,
-    stream: Callable[[Cursor], Iterator[Page]],
-    pages: Sequence[Page],
+    stream: Callable[[Cursor], Iterator[Page[Any]]],
+    pages: Sequence[Page[Any]],
 ) -> None:
     """The property that makes a crash survivable.
 
@@ -366,6 +368,105 @@ def _check_inverse_is_required(
     )
 
 
+def _check_capabilities(
+    report: _Report,
+    connector: ReadConnector,
+    *,
+    writeback: WritebackConnector | None,
+) -> None:
+    """A declaration that does not match the object is worse than none.
+
+    The runtime trusts `capabilities()` — it is how it decides whether to route
+    an action here at all — so a connector that claims write-back and cannot do
+    it produces an approved action that fails at execution, after a person has
+    read it and clicked. That is the failure this check exists to prevent.
+    """
+    declared = getattr(connector, "capabilities", None)
+    if declared is None:
+        report.fail(
+            "declares_capabilities",
+            "connector has no capabilities(); the runtime cannot tell what it supports "
+            "without one, and guessing is how a read-only connector gets sent an action",
+        )
+        return
+
+    try:
+        capabilities = declared()
+    except Exception as exc:
+        report.fail("declares_capabilities", f"capabilities() raised {type(exc).__name__}: {exc}")
+        return
+
+    if not isinstance(capabilities, Capabilities):
+        report.fail(
+            "declares_capabilities",
+            f"capabilities() returned {type(capabilities).__name__}, expected Capabilities",
+        )
+        return
+
+    if capabilities.kind != getattr(connector, "kind", ""):
+        report.fail(
+            "capabilities_match_connector",
+            f"capabilities().kind is {capabilities.kind!r} but connector.kind is "
+            f"{getattr(connector, 'kind', '')!r}",
+        )
+
+    if not compatible(capabilities.sdk_version):
+        report.fail(
+            "sdk_version_supported",
+            f"built against SDK {capabilities.sdk_version}, this runtime is {SDK_VERSION}",
+        )
+
+    missing_streams = sorted(set(capabilities.streams) - set(READ_STREAMS))
+    if missing_streams:
+        report.fail(
+            "declares_known_streams",
+            f"declares streams that do not exist: {', '.join(missing_streams)}",
+        )
+
+    if capabilities.supports_writeback:
+        # Whichever object actually writes. The SDK keeps ReadConnector and
+        # WritebackConnector as separate protocols on purpose, so a connector
+        # may put the write path in its own class — and checking the read half
+        # would then report a violation that is not there.
+        performer: Any = writeback if writeback is not None else connector
+        methods = ("capture_inverse", "execute", "rollback")
+        present = [name for name in methods if hasattr(performer, name)]
+        absent = [name for name in methods if not hasattr(performer, name)]
+
+        # None of the three, with nothing passed as `writeback`, is the split
+        # shape — the write half lives elsewhere and was not handed over. That
+        # is indistinguishable from a lie here, so it is not reported here; the
+        # registry catches it when it builds the writer, which is the path the
+        # runtime actually takes.
+        if absent and (present or writeback is not None):
+            report.fail(
+                "writeback_is_implemented",
+                f"declares {len(capabilities.actions)} action(s) but "
+                f"{type(performer).__name__} is missing {', '.join(absent)}; "
+                "an approved action would fail at execution",
+            )
+    elif writeback is not None:
+        report.fail(
+            "writeback_is_declared",
+            "a write-back connector was supplied but capabilities() declares no actions, "
+            "so the runtime would never route an action to it",
+        )
+
+    for action in capabilities.actions:
+        if not action.targets:
+            report.fail(
+                "actions_name_their_targets",
+                f"{action.action_type} names no target source types, so a proposal could "
+                "aim it at anything retrieved",
+            )
+        if getattr(action.payload_model, "model_config", {}).get("extra") != "forbid":
+            report.fail(
+                "action_payloads_forbid_extra",
+                f"{action.action_type}'s payload model allows extra fields; a proposal "
+                "could carry something this connector passes through unexamined",
+            )
+
+
 def check_connector(
     connector: ReadConnector,
     *,
@@ -383,6 +484,8 @@ def check_connector(
             "declares_schema_version",
             "connector.schema_version is empty; drift detection needs a baseline",
         )
+
+    _check_capabilities(report, connector, writeback=writeback)
 
     for name in READ_STREAMS:
         _check_read_stream(report, name, getattr(connector, name))

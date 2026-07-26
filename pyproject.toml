@@ -20,6 +20,17 @@ dependencies = [
 
 [project.scripts]
 hippo-migrate = "core.migrate:main"
+# So a connector living in another repository can check itself without adopting
+# this project's test layout (P3-SDK-1).
+hippo-conformance = "sync.connectors.conformance:main"
+
+# The connectors that ship with Hippo, registered through the same entry-point
+# group a third-party package uses. Deliberately not a private import path: if
+# the built-ins took a shortcut, the discovery mechanism every contributed
+# connector depends on would be the one nothing exercises (P3-SDK-1).
+[project.entry-points."hippo.connectors"]
+slack = "sync.connectors.builtin:SLACK"
+jira = "sync.connectors.builtin:JIRA"
 
 [dependency-groups]
 dev = [

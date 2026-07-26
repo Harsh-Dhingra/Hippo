@@ -329,7 +329,7 @@ def test_an_unknown_stream_name_is_rejected(migrated: Connection, connector_id: 
 class RateLimitedHalfway(MockConnector):
     """Delivers one page, then the source asks us to stop."""
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         pages = super().content(cursor)
         yield next(pages)
         raise RateLimitedError("slow down", retry_after=45.0)

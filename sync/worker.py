@@ -40,11 +40,8 @@ from uuid import UUID
 from core.config import Settings
 from core.db import Connection, connect
 from core.jobs import Handler, Job, Worker, WorkerConfig, enqueue
-from sync.connectors.jira import HttpTransport as JiraHttp
-from sync.connectors.jira import JiraConnector
+from sync.connectors.registry import MissingConfigError, plugin_for
 from sync.connectors.sdk import PermanentSourceError, ReadConnector, WritebackConnector
-from sync.connectors.slack import HttpTransport as SlackHttp
-from sync.connectors.slack import SlackConnector
 from sync.runtime import SyncRuntime
 from sync.scheduler import JOB_KIND, Cadence, acl_staleness, enqueue_due
 from sync.writeback import JOB_KIND as ACTION_KIND
@@ -77,53 +74,59 @@ def token_for(kind: str, connector_id: UUID) -> str:
     return token
 
 
-def build_connector(conn: Connection, connector_id: UUID) -> ReadConnector:
-    """The live connector for one row of the registry.
-
-    Config comes from the database, the credential from the environment, and
-    the two are never stored together.
-    """
+def _row(conn: Connection, connector_id: UUID) -> tuple[str, dict[str, object]]:
     with conn.cursor() as cur:
         cur.execute("SELECT kind, config FROM connectors WHERE id = %s", (connector_id,))
         row = cur.fetchone()
     if row is None:
         raise PermanentSourceError(f"no connector {connector_id}")
+    return str(row[0]), dict(row[1] or {})
 
-    kind, config = str(row[0]), dict(row[1] or {})
+
+def build_connector(conn: Connection, connector_id: UUID) -> ReadConnector:
+    """The live connector for one row of the registry.
+
+    Config comes from the database, the credential from the environment, and
+    the two are never stored together. Which implementation to build comes from
+    the plugin registry rather than from a chain of `if kind ==` here, so a
+    connector shipped in another package needs no edit to this file.
+    """
+    kind, config = _row(conn, connector_id)
     token = token_for(kind, connector_id)
 
-    if kind == "slack":
-        return SlackConnector(SlackHttp(token))
-    if kind == "jira":
-        base_url = str(config.get("base_url") or "")
-        if not base_url:
-            raise PermanentSourceError(f"jira connector {connector_id} has no base_url in config")
-        email = str(config.get("email") or os.environ.get("HIPPO_JIRA_EMAIL") or "")
-        if not email:
-            raise PermanentSourceError(
-                f"jira connector {connector_id} needs the account email its token belongs to: "
-                "set config.email or HIPPO_JIRA_EMAIL"
-            )
-        return JiraConnector(JiraHttp(base_url, email, token))
+    if kind == "jira" and not config.get("email"):
+        # Historic convenience: the account the Jira token belongs to could be
+        # given process-wide before connector config could hold it.
+        config = {**config, "email": os.environ.get("HIPPO_JIRA_EMAIL", "")}
 
-    raise PermanentSourceError(f"no connector implementation for kind {kind!r}")
+    try:
+        plugin = plugin_for(kind)
+    except LookupError as exc:
+        raise PermanentSourceError(str(exc)) from exc
+
+    try:
+        return plugin.connector(config, token)
+    except MissingConfigError as exc:
+        raise PermanentSourceError(f"connector {connector_id}: {exc}") from exc
 
 
 def build_writeback_connector(conn: Connection, connector_id: UUID) -> WritebackConnector:
     """The write-back connector for one row, or a refusal.
 
     Separate from build_connector because being able to read is not being able
-    to write. Slack is read-only in v0 and SlackConnector has no write-back
-    methods at all, so asking it to perform an action has to fail here — with a
-    message naming the connector — rather than at an AttributeError somewhere
-    inside the executor.
+    to write. Whether a connector can write is now declared in its capabilities
+    rather than inferred from its class — `isinstance` cannot answer the
+    question for a class this process has never imported, which is every
+    third-party connector.
     """
-    connector = build_connector(conn, connector_id)
-    if not isinstance(connector, JiraConnector):
-        raise PermanentSourceError(
-            f"connector {connector_id} ({type(connector).__name__}) cannot perform write-backs"
-        )
-    return connector
+    kind, config = _row(conn, connector_id)
+    if kind == "jira" and not config.get("email"):
+        config = {**config, "email": os.environ.get("HIPPO_JIRA_EMAIL", "")}
+    try:
+        plugin = plugin_for(kind)
+        return plugin.writer(config, token_for(kind, connector_id))
+    except (LookupError, MissingConfigError) as exc:
+        raise PermanentSourceError(f"connector {connector_id}: {exc}") from exc
 
 
 def sync_stream(conn: Connection, job: Job) -> None:

@@ -30,6 +30,45 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# ---------------------------------------------------------------------------
+# Version
+# ---------------------------------------------------------------------------
+# The contract in this file, versioned so a connector written outside this
+# repository can say what it was built against and be told rather than
+# discovered — the alternative is a third-party connector failing in the middle
+# of a sync with an AttributeError.
+#
+# Major changes when an existing connector would stop working. Minor when
+# something is added that older connectors can ignore. A connector declaring
+# 1.0 keeps working on 1.7; one declaring 2.0 does not run on 1.x at all.
+SDK_VERSION = "1.0"
+
+
+def compatible(required: str, available: str = SDK_VERSION) -> bool:
+    """Whether a connector built against `required` runs on `available`.
+
+    Same major, and the connector does not ask for a minor this runtime has not
+    got. Deliberately strict about the major: a connector that expects a field
+    which no longer exists should refuse to start rather than sync a subtly
+    wrong shape of the world.
+    """
+    try:
+        want = tuple(int(part) for part in required.split(".")[:2])
+        have = tuple(int(part) for part in available.split(".")[:2])
+    except ValueError:
+        return False
+    return want[0] == have[0] and want <= have
+
+
+class IncompatibleConnectorError(Exception):
+    """A connector built against a version of this contract that does not run here."""
+
+
+# The three read streams every connector answers. Named here rather than in the
+# harness so a connector can declare a subset without importing the test code.
+READ_STREAMS = ("identities", "content", "acls")
+
+
 # A connector-defined resume token, stored verbatim in sync_state.cursor as
 # jsonb. Slack uses a message ts, Jira an updated-since plus a page token; the
 # runtime never interprets it. An empty mapping means "from the beginning".
@@ -121,18 +160,24 @@ class AclRecord(BaseModel):
     access: Literal["read"] = "read"
 
 
-class Page(BaseModel):
+class Page[Record](BaseModel):
     """One batch of records plus the cursor that resumes after them.
 
     The runtime commits a page's records and its cursor in one transaction, so
     a crash resumes at a page boundary and never mid-batch. That is the whole
     reason a stream yields pages rather than records: the cursor has to arrive
     with the data it corresponds to.
+
+    Generic since v1, so `Page[IdentityRecord]` tells a connector author's type
+    checker what belongs in it. Bare `Page` still means `Page[Any]` and still
+    works — the conformance harness checks record types at runtime either way,
+    because a connector written in an editor with no type checking is exactly
+    the one that gets this wrong.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    records: tuple[Any, ...] = ()
+    records: tuple[Record, ...] = ()
     cursor: dict[str, Any] = Field(default_factory=dict)
     has_more: bool = False
 
@@ -172,6 +217,77 @@ class InverseCaptureError(ConnectorError):
     """
 
 
+class ActionDefinition(BaseModel):
+    """One thing a connector can be asked to do, declared by the connector.
+
+    Before v1 the write-back vocabulary was a literal in the agent, which meant
+    a connector written outside this repository could read but never act — the
+    agent had no way to learn that `github.comment` existed. Declaring it here
+    moves the vocabulary to the only place that knows what the source system
+    supports.
+
+    **The vocabulary stays closed.** This does not let content introduce an
+    action: definitions come from installed code and operator configuration,
+    never from a synced payload. What changes is who writes the list, not
+    whether a message can add to it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    action_type: str = Field(min_length=1, description="e.g. 'jira.comment'")
+    description: str = Field(min_length=1, description="shown to the model, so write it plainly")
+    # What the action may be aimed at, in source terms. A Jira comment belongs
+    # on a Jira issue; without this a proposal could name any retrieved chunk
+    # and the write-back would have to guess what to do with it.
+    targets: frozenset[str]
+    # The example shape shown to the model. One line, concrete values.
+    payload_schema: str = Field(min_length=1)
+    # Validated before anything is written. `extra="forbid"` on this model is
+    # what stops a proposal smuggling a field the connector will pass through.
+    payload_model: type[BaseModel]
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(self.payload_model.model_validate(dict(payload)).model_dump())
+
+
+class Capabilities(BaseModel):
+    """What a connector can do, stated rather than discovered.
+
+    The runtime used to work this out with `isinstance`, which cannot be done
+    for a class it has never imported, and which answers "does this object have
+    the methods" rather than "does this source system support the operation".
+    A Jira instance where the token cannot transition issues has the methods and
+    not the capability.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str = Field(min_length=1, description="'slack', 'jira', 'github'")
+    # The connector's own payload schema version, for drift reporting. Not the
+    # SDK version: one is about the source system's shape, the other about this
+    # contract's.
+    schema_version: str = Field(min_length=1)
+    sdk_version: str = Field(default=SDK_VERSION, description="the contract it was built against")
+    streams: frozenset[str] = frozenset(READ_STREAMS)
+    actions: tuple[ActionDefinition, ...] = ()
+
+    @property
+    def supports_writeback(self) -> bool:
+        """Declared, not inferred. An empty tuple is a read-only connector."""
+        return bool(self.actions)
+
+    @property
+    def action_types(self) -> frozenset[str]:
+        return frozenset(action.action_type for action in self.actions)
+
+    def require_compatible(self) -> None:
+        """Refuse a connector this runtime cannot honour, before it runs."""
+        if not compatible(self.sdk_version):
+            raise IncompatibleConnectorError(
+                f"connector {self.kind!r} needs SDK {self.sdk_version}, this is {SDK_VERSION}"
+            )
+
+
 class ReadConnector(Protocol):
     """The three read streams.
 
@@ -191,11 +307,15 @@ class ReadConnector(Protocol):
     kind: str
     schema_version: str
 
-    def identities(self, cursor: Cursor) -> Iterator[Page]: ...
+    def capabilities(self) -> Capabilities:
+        """What this connector supports. Called before any stream is read."""
+        ...
 
-    def content(self, cursor: Cursor) -> Iterator[Page]: ...
+    def identities(self, cursor: Cursor) -> Iterator[Page[IdentityRecord]]: ...
 
-    def acls(self, cursor: Cursor) -> Iterator[Page]: ...
+    def content(self, cursor: Cursor) -> Iterator[Page[ContentRecord]]: ...
+
+    def acls(self, cursor: Cursor) -> Iterator[Page[AclRecord]]: ...
 
 
 class WritebackRequest(BaseModel):

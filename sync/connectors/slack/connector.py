@@ -27,6 +27,7 @@ from typing import Any
 from sync.connectors.sdk import (
     DONE,
     AclRecord,
+    Capabilities,
     ContentRecord,
     Cursor,
     IdentityRecord,
@@ -54,6 +55,15 @@ class SlackConnector:
     kind = "slack"
     schema_version = "2026-07-01"
 
+    def capabilities(self) -> Capabilities:
+        """Read-only in v0. An empty `actions` is the declaration, so nothing
+        has to infer it from which methods this class happens to have."""
+        return Capabilities(
+            kind=self.kind,
+            schema_version=self.schema_version,
+            actions=(),
+        )
+
     def __init__(self, transport: SlackTransport, *, limit: int = 200) -> None:
         self._transport = transport
         self._limit = limit
@@ -64,7 +74,7 @@ class SlackConnector:
 
     # -- identities ---------------------------------------------------------
 
-    def identities(self, cursor: Cursor) -> Iterator[Page]:
+    def identities(self, cursor: Cursor) -> Iterator[Page[IdentityRecord]]:
         """Users, plus the synthetic workspace group they all belong to.
 
         The group is emitted on the first page only, so resuming from a later
@@ -169,7 +179,7 @@ class SlackConnector:
             container=SourceRef(source_type=CHANNEL, source_id=channel_id),
         )
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[ContentRecord]]:
         """Channels first, then each channel's messages and threads.
 
         The cursor names the phase, so a resume knows whether it is still
@@ -241,7 +251,7 @@ class SlackConnector:
 
     # -- acls ---------------------------------------------------------------
 
-    def acls(self, cursor: Cursor) -> Iterator[Page]:
+    def acls(self, cursor: Cursor) -> Iterator[Page[AclRecord]]:
         """One page per channel, because that is the unit Slack grants on."""
         channels = self._channels()
         index = int(cursor.get("channel", 0))

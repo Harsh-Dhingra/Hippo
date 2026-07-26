@@ -554,7 +554,7 @@ def test_a_connector_that_cannot_write_is_refused(migrated: Connection) -> None:
 
     os.environ["HIPPO_SLACK_TOKEN"] = "xoxb-test"
     try:
-        with pytest.raises(PermanentSourceError, match="cannot perform write-backs"):
+        with pytest.raises(PermanentSourceError, match="read-only"):
             build_writeback_connector(migrated, connector_id)
     finally:
         del os.environ["HIPPO_SLACK_TOKEN"]

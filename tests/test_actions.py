@@ -22,8 +22,9 @@ import pytest
 from psycopg import errors
 
 from agent.actions import (
-    ACTIONS,
-    CommentPayload,
+    actions as action_vocabulary,
+)
+from agent.actions import (
     build_proposal,
     describe,
     insert_pending,
@@ -746,7 +747,7 @@ def test_the_database_refuses_execution_without_an_approver(
 def test_the_proposal_prompt_lists_only_known_actions() -> None:
     prompt = propose_system_prompt()
 
-    for action_type in ACTIONS:
+    for action_type in action_vocabulary():
         assert action_type in prompt
     assert "delete" not in prompt.lower()
 
@@ -789,6 +790,10 @@ def test_an_unknown_action_describes_itself_generically() -> None:
 
 
 def test_the_comment_payload_rejects_an_oversized_body() -> None:
+    """The payload model now lives with the connector that executes it, which
+    is what lets a connector in another package declare its own."""
+    from sync.connectors.jira.actions import CommentPayload
+
     with pytest.raises(Exception, match="String should have at most"):
         CommentPayload(body="x" * 33_000)
 

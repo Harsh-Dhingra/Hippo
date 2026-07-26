@@ -103,24 +103,24 @@ def test_fixtures_describe_a_world_the_permission_tests_can_use() -> None:
 
 
 class YieldsNoPages(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         return
         yield  # pragma: no cover - unreachable, makes this a generator
 
 
 class NeverFinishes(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         while True:
             yield Page(records=(), cursor={"offset": 0}, has_more=True)
 
 
 class ClaimsMoreThanItHas(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         yield Page(records=(), cursor={"offset": 0}, has_more=True)
 
 
 class LiesAboutHasMore(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         yield Page(records=(), cursor={"offset": 0}, has_more=False)
         yield Page(records=(), cursor={"offset": 1}, has_more=False)
 
@@ -129,7 +129,7 @@ class IgnoresTheCursor(MockConnector):
     """Restarts from the beginning every time, so a resumed sync re-reads the
     entire source forever."""
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         yield from super().content({})
 
 
@@ -137,7 +137,7 @@ class LosesRecordsOnResume(MockConnector):
     """The dangerous one: resuming skips ahead, and the records in between are
     never delivered by any sync."""
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         if cursor.get("offset"):
             yield Page(records=(), cursor=dict(cursor), has_more=False)
             return
@@ -145,7 +145,7 @@ class LosesRecordsOnResume(MockConnector):
 
 
 class RepeatsItself(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         record = ContentRecord(source_type="mock.message", source_id="M-1", payload={})
         yield Page(records=(record, record), cursor={"offset": 1}, has_more=False)
 
@@ -155,19 +155,19 @@ class ChangesItsMind(MockConnector):
         super().__init__()
         self._runs = 0
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         self._runs += 1
         record = ContentRecord(source_type="mock.message", source_id=f"M-{self._runs}", payload={})
         yield Page(records=(record,), cursor={"offset": 1}, has_more=False)
 
 
 class UnstorableCursor(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         yield Page(records=(), cursor={"seen": {"a", "set"}}, has_more=False)
 
 
 class WrongRecordType(MockConnector):
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         yield Page(
             records=(IdentityRecord(kind="user", source_id="U-ALICE"),),
             cursor={"offset": 1},
@@ -176,7 +176,7 @@ class WrongRecordType(MockConnector):
 
 
 class GrantsOnAnUnknownObject(MockConnector):
-    def acls(self, cursor: Cursor) -> Iterator[Page]:
+    def acls(self, cursor: Cursor) -> Iterator[Page[Any]]:
         record = AclRecord(
             target=SourceRef(source_type="mock.channel", source_id="C-GHOST"),
             principal_source_id="U-ALICE",
@@ -185,7 +185,7 @@ class GrantsOnAnUnknownObject(MockConnector):
 
 
 class GrantsToAnUnknownPrincipal(MockConnector):
-    def acls(self, cursor: Cursor) -> Iterator[Page]:
+    def acls(self, cursor: Cursor) -> Iterator[Page[Any]]:
         record = AclRecord(
             target=SourceRef(source_type="mock.channel", source_id="C-GENERAL"),
             principal_source_id="U-NOBODY",
@@ -196,7 +196,7 @@ class GrantsToAnUnknownPrincipal(MockConnector):
 class YieldsSomethingElseEntirely(MockConnector):
     """Not a record at all. The harness must say so rather than crash on it."""
 
-    def acls(self, cursor: Cursor) -> Iterator[Page]:
+    def acls(self, cursor: Cursor) -> Iterator[Page[Any]]:
         yield Page(records=("just a string",), cursor={"offset": 1}, has_more=False)
 
 
@@ -207,7 +207,7 @@ class LoopsOnTheSecondPass(MockConnector):
         super().__init__()
         self._passes = 0
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         self._passes += 1
         if self._passes >= 2:
             while True:
@@ -220,7 +220,7 @@ class LoopsOnResume(MockConnector):
     """Terminates from an empty cursor and never from a resumed one, which is
     the shape a real paging bug takes."""
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[Any]]:
         if cursor.get("offset"):
             while True:
                 yield Page(records=(), cursor=dict(cursor), has_more=True)

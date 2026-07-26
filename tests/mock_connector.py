@@ -15,8 +15,12 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from sync.connectors.sdk import (
     AclRecord,
+    ActionDefinition,
+    Capabilities,
     ContentRecord,
     Cursor,
     IdentityRecord,
@@ -29,6 +33,28 @@ from sync.connectors.sdk import (
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "mock"
+
+COMMENT_ACTION = "mock.comment"
+
+
+class MockCommentPayload(BaseModel):
+    """extra="forbid" is part of the contract, not a preference: it is what
+    stops a proposal carrying a field the connector would pass through."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    body: str = Field(min_length=1, max_length=4000)
+
+
+ACTIONS = (
+    ActionDefinition(
+        action_type=COMMENT_ACTION,
+        description="Add a comment to a mock ticket.",
+        targets=frozenset({"mock.ticket"}),
+        payload_schema='{"body": "the comment text"}',
+        payload_model=MockCommentPayload,
+    ),
+)
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -50,6 +76,22 @@ class MockConnector:
     kind = "mock"
     schema_version = "2026-07-01"
 
+    def capabilities(self) -> Capabilities:
+        """Declared, like any connector's, so the worked example shows the
+        shape a contributor should copy.
+
+        The actions are declared here even though `MockWriteback` performs
+        them: capabilities describe the connector as the runtime sees it, and
+        the runtime decides whether to route an action from this and nothing
+        else. A split implementation that declared nothing here would never be
+        sent one.
+        """
+        return Capabilities(
+            kind=self.kind,
+            schema_version=self.schema_version,
+            actions=ACTIONS,
+        )
+
     def __init__(self, root: Path = FIXTURES, *, page_size: int = 2) -> None:
         if page_size < 1:
             msg = f"page_size must be >= 1, got {page_size}"
@@ -59,7 +101,7 @@ class MockConnector:
         self._content = [ContentRecord(**row) for row in _load(root / "content.json")]
         self._acls = [AclRecord(**row) for row in _load(root / "acls.json")]
 
-    def _paginate(self, records: Sequence[Any], cursor: Cursor) -> Iterator[Page]:
+    def _paginate(self, records: Sequence[Any], cursor: Cursor) -> Iterator[Page[Any]]:
         offset = int(cursor.get("offset", 0))
         while True:
             batch = tuple(records[offset : offset + self._page_size])
@@ -69,13 +111,13 @@ class MockConnector:
             if not has_more:
                 return
 
-    def identities(self, cursor: Cursor) -> Iterator[Page]:
+    def identities(self, cursor: Cursor) -> Iterator[Page[IdentityRecord]]:
         yield from self._paginate(self._identities, cursor)
 
-    def content(self, cursor: Cursor) -> Iterator[Page]:
+    def content(self, cursor: Cursor) -> Iterator[Page[ContentRecord]]:
         yield from self._paginate(self._content, cursor)
 
-    def acls(self, cursor: Cursor) -> Iterator[Page]:
+    def acls(self, cursor: Cursor) -> Iterator[Page[AclRecord]]:
         yield from self._paginate(self._acls, cursor)
 
 
@@ -87,7 +129,7 @@ class MockWriteback:
     should aim for: capture enough to reconstruct, not a diff.
     """
 
-    COMMENT = "mock.comment"
+    COMMENT = COMMENT_ACTION
 
     def __init__(self) -> None:
         self.tickets: dict[tuple[str, str], list[str]] = {
