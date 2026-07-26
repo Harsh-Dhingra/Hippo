@@ -23,8 +23,27 @@
 | Frontend | **Next.js + TypeScript + Tailwind** (the one place the pasted doc and I agree) | Server-rendered Python templates, SPA frameworks du jour | n/a |
 | Deploy v0 | **docker compose: app + postgres. Two containers.** | K8s-first, Helm-first | Real multi-node adopters exist → charts at P4-ENT-2, compose stays forever as the front door |
 | Auth | **Session auth v0 → OIDC at P2-GOV-3 → SCIM at P4-ENT-1** | Building auth cleverness early | Per plan |
+| Token verification | **PyJWT + cryptography** (P2-GOV-3) | Authlib, hand-rolled RSA verification | Never hand-rolled; a second library only if PyJWT stops being maintained |
 | Observability | **Prometheus endpoints + structured JSON logs from commit one; Grafana dashboard shipped in /deploy** | OTel full-trace mesh day one | OTel when a real adopter asks |
 | CI quality gate | **mypy --strict, ruff, pytest w/ coverage floor, compose smoke test, role-grant leak test — all blocking, from commit one** | "We'll add tests later" | Never |
+
+### On adding PyJWT (P2-GOV-3)
+
+The refused list above is about infrastructure — things that add a process to
+operate, a backup story, a second permission implementation. A JWT library adds
+none of those, and the alternative is worse in a specific way: verifying an
+RS256 signature by hand means implementing PKCS#1 v1.5 padding checks, and the
+list of ways that goes subtly wrong is long and well documented. Python's
+standard library has no RSA, so "no dependency" is not on the menu.
+
+PyJWT over Authlib because it does one thing. Authlib is a full OAuth client and
+server framework; the parts of it this project would use are the parts PyJWT
+already is, and the rest is surface. `cryptography` arrives with it and is the
+same library `httpx` already pulls in for TLS.
+
+The check that matters is not in the library either way: the algorithm allowlist,
+the issuer comparison, the audience, the nonce. Those are ours, in `api/oidc.py`,
+and they are what `tests/test_oidc.py` spends most of its length on.
 
 ## Why the whole stack is one database (the argument, once, in full)
 

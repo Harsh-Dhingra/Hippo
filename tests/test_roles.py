@@ -57,6 +57,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "trace_retrievals": NONE,
         "users": NONE,
         "sessions": NONE,
+        "auth_flows": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -81,6 +82,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "trace_retrievals": NONE,
         "users": NONE,
         "sessions": NONE,
+        "auth_flows": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -108,6 +110,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "schema_migrations": NONE,
         "users": NONE,
         "sessions": NONE,
+        "auth_flows": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -117,6 +120,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
     "hippo_api": {
         "users": WRITE,
         "sessions": WRITE,
+        # In-flight logins. Written and consumed by the process serving the
+        # login screen and by nothing else: a sync worker holding the PKCE
+        # verifier for somebody's login has no reason to and every risk of it.
+        "auth_flows": WRITE,
         # Approve and decline. Not INSERT: a proposal comes from the agent, and
         # an API that could mint its own would make the split decorative.
         "actions": frozenset({"SELECT", "UPDATE"}),
@@ -416,6 +423,9 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
             "hippo_api",
             [
                 "acknowledge_alert",
+                # Offboarding. Disabling a user has to reach their live
+                # sessions too, or a seven-day cookie outlives the account.
+                "disable_user",
                 "ensure_personal_scope",
                 "my_action_events",
                 "my_notes",

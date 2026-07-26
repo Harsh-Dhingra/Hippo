@@ -236,7 +236,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # The router borrows connections through the pool the lifespan opens, so it
     # reads app.state.db at request time rather than capturing a pool that does
     # not exist yet.
-    app.include_router(build_router(_LazyDatabase(app), agent, build_embeddings(resolved)))
+    app.include_router(
+        build_router(_LazyDatabase(app), agent, build_embeddings(resolved), resolved)
+    )
 
     @app.middleware("http")
     async def _count_requests(

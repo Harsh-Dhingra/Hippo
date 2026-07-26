@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,9 +41,10 @@ from agent.links import ConnectorDirectory, load_directory
 from agent.loop import Agent
 from agent.timeline import build as build_timeline
 from agent.trace import list_traces, load_trace
-from api import approvals, auth, notes
+from api import approvals, auth, notes, oidc
 from core.alerts import acknowledge, open_alerts
 from core.audit import AuditEvent, events_for, to_csv, to_jsonl
+from core.config import Settings, get_settings
 from core.db import Connection
 from resolver.embeddings import EmbeddingProvider
 
@@ -97,6 +99,26 @@ class SessionResponse(BaseModel):
     token: str
     expires_at: datetime
     user: UserResponse
+    # Where the person was going before they were asked to log in. Always a
+    # relative path; api/oidc.py refuses anything that could leave the site.
+    redirect_to: str | None = None
+
+
+class SSOStartRequest(BaseModel):
+    redirect_to: str | None = Field(default=None, max_length=2048)
+
+
+class SSOStartResponse(BaseModel):
+    authorization_url: str
+    # Returned so a caller can pin it to the browser that started the login.
+    # It is not a secret — it travels in the URL — and it is not the check that
+    # makes the callback safe: the flow row it names is single-use server-side.
+    state: str
+
+
+class SSOCallbackRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=4096)
+    state: str = Field(min_length=1, max_length=512)
 
 
 class QueryRequest(BaseModel):
@@ -247,6 +269,7 @@ def build_router(
     db: ConnectionSource,
     agent: Callable[[Connection], Agent],
     embedder: EmbeddingProvider | None = None,
+    settings: Settings | None = None,
 ) -> APIRouter:
     """Assemble the v1 routes.
 
@@ -256,6 +279,22 @@ def build_router(
     """
     router = APIRouter(prefix="/api/v1")
     cached_directory: dict[str, ConnectorDirectory] = {}
+    resolved = settings or get_settings()
+    cached_sso: dict[str, oidc.Client] = {}
+
+    def sso() -> oidc.Client:
+        """The IdP client, built on first use.
+
+        Deferred because building it reads the discovery document, and an
+        install with no SSO configured must still start — and one whose IdP is
+        briefly unreachable must still serve password logins.
+        """
+        if "client" not in cached_sso:
+            try:
+                cached_sso["client"] = oidc.Client(resolved)
+            except oidc.OIDCError as exc:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        return cached_sso["client"]
 
     def _directory(conn: Connection) -> ConnectorDirectory:
         """Loaded once. It changes when an operator adds a connector, not per
@@ -335,6 +374,72 @@ def build_router(
     @router.get("/me", tags=["auth"], summary="Who am I")
     def me(user: CurrentUser) -> UserResponse:
         return _user(user)
+
+    # -- single sign-on ----------------------------------------------------
+
+    @router.get("/auth/sso", tags=["auth"], summary="Whether SSO is configured")
+    def sso_status() -> oidc.SSOStatus:
+        """Unauthenticated on purpose: the login screen has to ask before
+        anyone has logged in. Carries a label and two booleans, never the
+        client secret and never the issuer's internal URLs."""
+        return oidc.status(resolved)
+
+    @router.post(
+        "/auth/sso/start",
+        tags=["auth"],
+        status_code=status.HTTP_201_CREATED,
+        summary="Begin an SSO login",
+    )
+    def start_sso(conn: Conn, body: SSOStartRequest) -> SSOStartResponse:
+        try:
+            start = sso().begin(conn, redirect_to=body.redirect_to)
+        except oidc.OIDCError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            # The IdP being unreachable is an outage, not a bad request, and it
+            # must not read as "your credentials were wrong".
+            LOG.error("could not reach the identity provider", extra={"error": str(exc)[:200]})
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, "the identity provider is unreachable"
+            ) from exc
+        return SSOStartResponse(authorization_url=start.authorization_url, state=start.state)
+
+    @router.post(
+        "/auth/sso/callback",
+        tags=["auth"],
+        status_code=status.HTTP_201_CREATED,
+        summary="Finish an SSO login",
+    )
+    def finish_sso(conn: Conn, body: SSOCallbackRequest) -> SessionResponse:
+        """Exchange the code for a session.
+
+        Every failure below is one 401 with one message. Which check failed —
+        unknown subject, disabled account, replayed state, an address already
+        claimed by another identity — is exactly the kind of detail that turns
+        a login endpoint into an account enumeration oracle. The structured log
+        keeps the specifics for whoever is meant to have them.
+        """
+        try:
+            session, redirect_to = sso().complete(conn, code=body.code, state=body.state)
+        except oidc.OIDCUnavailableError as exc:
+            LOG.error("the identity provider failed mid-login", extra={"reason": str(exc)})
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, "the identity provider is unreachable"
+            ) from exc
+        except oidc.OIDCError as exc:
+            LOG.warning("sso login refused", extra={"reason": str(exc)})
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "could not sign you in") from exc
+        except httpx.HTTPError as exc:
+            LOG.error("could not reach the identity provider", extra={"error": str(exc)[:200]})
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, "the identity provider is unreachable"
+            ) from exc
+        return SessionResponse(
+            token=session.token,
+            expires_at=session.expires_at,
+            user=_user(session.user),
+            redirect_to=redirect_to,
+        )
 
     # -- queries -----------------------------------------------------------
 

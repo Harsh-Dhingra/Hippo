@@ -76,6 +76,36 @@ class Settings(BaseSettings):
         "to a single step; set false when migrations are run as their own deploy stage.",
     )
 
+    # --- Single sign-on ---------------------------------------------------
+    # Off unless an issuer is set, because a self-hosted install has to work on
+    # a laptop with no IdP in front of it. See api/oidc.py for what is verified.
+    oidc_issuer: str = Field(
+        default="",
+        description="Issuer URL, e.g. https://acme.okta.com. Its discovery document must "
+        "declare exactly this value as `issuer`, or login is refused. Empty disables SSO.",
+    )
+    oidc_client_id: str = Field(default="")
+    oidc_client_secret: SecretStr = Field(
+        default=SecretStr(""), description="From the environment, never the repo or the database."
+    )
+    oidc_redirect_uri: str = Field(
+        default="",
+        description="Where the IdP sends the person back. Must match the value registered "
+        "with the IdP exactly, including scheme and any trailing path.",
+    )
+    oidc_scopes: str = Field(
+        default="openid email profile",
+        description="`openid` is added if absent. `email` is what maps a login to the "
+        "principals that carry its permissions, so without it a session sees nothing.",
+    )
+    oidc_button_label: str = Field(default="Sign in with SSO")
+    oidc_auto_create_users: bool = Field(
+        default=True,
+        description="Let a verified IdP identity create its own user row on first login. "
+        "False means an administrator provisions people first and an unknown subject is "
+        "refused, which is what an install that treats signup as an approval wants.",
+    )
+
     # --- Embeddings -------------------------------------------------------
     # Config-abstracted per STACK.md, so changing the model is a resolver
     # re-run rather than a migration. The default needs no service, which is

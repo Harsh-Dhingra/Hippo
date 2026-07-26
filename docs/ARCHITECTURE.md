@@ -144,6 +144,16 @@ Decision: resolver reads only `raw_records`, writes only graph tables. If resolu
 | 5 | Single-tenant self-host | Multi-tenant SaaS-ready | A hosted offering exists (Horizon 3) |
 | 6 | One agent, small LangGraph | Agent framework / no-code builder | Community demand post-Horizon 1 |
 | 7 | Everything-consequential default | Risk-tiered auto-execution | After the approval UX and rollback are proven |
+| 8 | OIDC subject is the user identity; email only maps to principals | Email as the account key | SCIM lands (Phase 4) and group membership arrives with it |
+| 9 | Passwords stay alongside SSO | SSO-only once configured | Never — an install whose only way in is the IdP has none when the IdP is down |
+
+**On 8.** The link from a login to a principal is an email match, because an
+email is the only thing connectors agree on. That makes email an authorisation
+input, so whoever gets to assert one decides what a session can read. Two
+consequences the code enforces: an unverified `email_verified` claim maps to no
+principal at all, and an address already claimed by a different IdP subject is
+refused rather than adopted — a reissued address must not inherit the previous
+holder's history.
 
 ## 12. Definition of done, v0
 

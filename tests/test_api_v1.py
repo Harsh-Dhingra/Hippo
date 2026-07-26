@@ -713,6 +713,9 @@ def test_the_openapi_document_covers_every_v1_route(client: TestClient) -> None:
     assert set(spec["paths"]) >= {
         "/api/v1/sessions",
         "/api/v1/sessions/current",
+        "/api/v1/auth/sso",
+        "/api/v1/auth/sso/start",
+        "/api/v1/auth/sso/callback",
         "/api/v1/me",
         "/api/v1/queries",
         "/api/v1/actions",
@@ -751,13 +754,25 @@ def test_the_spec_says_what_approval_does_not_do(client: TestClient) -> None:
     assert "Nothing is executed here" in description
 
 
+# The only routes a person can reach before they have logged in, which is what
+# makes them the only ones worth listing by hand. Each is here because a login
+# screen has to work with no session at all, and each returns nothing that
+# depends on who is asking.
+UNAUTHENTICATED = {
+    "/api/v1/sessions",  # logging in
+    "/api/v1/auth/sso",  # whether there is an SSO button to draw
+    "/api/v1/auth/sso/start",  # beginning one
+    "/api/v1/auth/sso/callback",  # finishing one
+}
+
+
 def test_every_v1_route_requires_authentication(client: TestClient, world: Connection) -> None:
     """Swept rather than listed, so a route added without auth fails here
     instead of shipping."""
     spec = client.get("/openapi.json").json()
 
     for path, methods in spec["paths"].items():
-        if not path.startswith("/api/v1") or path == "/api/v1/sessions":
+        if not path.startswith("/api/v1") or path in UNAUTHENTICATED:
             continue
         for method in methods:
             response = client.request(

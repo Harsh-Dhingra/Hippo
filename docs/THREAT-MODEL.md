@@ -209,6 +209,41 @@ fragment must not ship without an answer. Options worth weighing then: running
 connectors out-of-process, restricting ACL writes to a reviewed path, or
 requiring signed connectors.
 
+### 4.9 A forged or borrowed identity assertion (A3)
+
+Everything an IdP tells us arrives through the browser of the person logging
+in, so none of it is trusted on arrival. The id_token's signature is checked
+against keys fetched from the issuer directly, over a channel the browser is
+not in. The algorithm is checked against an allowlist of asymmetric algorithms:
+`none` is the textbook bypass, and HMAC is the subtler one, where an attacker
+signs with the public key everyone already has. `iss`, `aud`, `azp`, `exp` and
+`nonce` are all checked, because a token minted for another application or for
+an earlier login attempt is a perfectly valid token that must still be refused.
+The code is exchanged with PKCE, so one lifted from a redirect, a proxy log or
+a referrer header is useless without a verifier that never leaves the database.
+
+Two failures here are authorisation failures rather than authentication ones,
+and they are the ones specific to this system:
+
+* **An unverified email.** The link from a login to a principal is an email
+  match, so an IdP that lets somebody type an address into their own profile
+  would otherwise be a way to inherit a colleague's access. An unverified claim
+  maps to no principal: they sign in, and they see nothing.
+* **A reissued address.** Somebody leaves, their address is reassigned, and the
+  new holder signs in. Adopting the existing account would hand over its
+  history, so an address already claimed by a different IdP subject is refused.
+
+Disabling an account drops its live sessions in the same statement. Without
+that, somebody removed from the IdP this morning keeps a working seven-day
+cookie until this evening — which is most of what SSO was adopted to prevent.
+
+Login state is held server-side and consumed in the statement that reads it, so
+two callbacks racing on one state cannot both proceed. Post-login redirects are
+relative paths only: an open redirect on a login endpoint is a phishing
+primitive, because the link and the domain are both genuinely ours.
+
+*Tested by:* `test_oidc.py`, against an in-process IdP with a real signing key.
+
 ---
 
 ## 5. What we deliberately do not defend against
