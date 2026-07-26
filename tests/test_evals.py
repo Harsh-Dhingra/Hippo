@@ -547,3 +547,52 @@ def test_the_comparison_runner_reports_a_table() -> None:
     assert result.leaks == 0
     assert result.lexical >= FLOOR_LEXICAL
     assert "hashing" in result.row()
+
+
+# ---------------------------------------------------------------------------
+# Live verification. Only the paths that make no call: CLAUDE.md keeps live
+# model calls out of CI, so the run itself is a script a person invokes.
+# ---------------------------------------------------------------------------
+
+
+def test_the_live_run_estimates_before_it_spends(capsys: pytest.CaptureFixture[str]) -> None:
+    """Anything that calls out to a paid API should be able to say what it will
+    cost without calling out to a paid API."""
+    from evals.live import main
+
+    assert main(["--dry-run"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "No calls made" in printed
+    assert "$" in printed
+
+
+def test_the_live_run_refuses_without_a_key(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And says where to put one, rather than failing inside the SDK."""
+    from core.config import Settings, get_settings
+    from evals import live
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        live,
+        "get_settings",
+        lambda: Settings(_env_file=None),  # type: ignore[call-arg]
+    )
+
+    assert live.main([]) == 2
+
+    printed = capsys.readouterr().out
+    assert "HIPPO_MODEL_API_KEY" in printed
+    assert "gitignored" in printed
+
+
+def test_the_live_run_uses_the_same_injection_corpus() -> None:
+    """One corpus, not two. A live run that exercised a different set of
+    attacks would prove something about a set nobody maintains."""
+    from pathlib import Path as _Path
+
+    source = _Path("evals/live.py").read_text(encoding="utf-8")
+
+    assert "from tests.test_injection_corpus import ATTACKS" in source

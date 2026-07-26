@@ -84,7 +84,14 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-omit = ["*/__main__.py"]
+omit = [
+    "*/__main__.py",
+    # The live-model verification. CLAUDE.md keeps live API calls out of CI, so
+    # this is by definition code CI cannot execute — omitted rather than left
+    # to drag the floor down and invite someone to lower it. Its safe paths
+    # (the cost estimate, the missing-key branch) are still tested.
+    "evals/live.py",
+]
 
 [tool.coverage.report]
 exclude_also = [
