@@ -278,6 +278,38 @@ inside; Hippo's own provider is pluggable to a local endpoint.
 *Tested by:* `test_mcp_surface.py`, including two developers over one corpus
 where neither session reaches the other's content.
 
+### 4.11 A model in the resolver (A5)
+
+Identity resolution is the most dangerous place in this system to put a
+language model, because deciding two records are the same thing is one step
+from deciding two accounts are the same person — and that is a permission
+decision, not a ranking one.
+
+Three structures, not three intentions:
+
+* **A model cannot reach `principals.identity_id`.** That column feeds
+  `_expanded_principals()`, which is the filter's notion of who you are. Person
+  identity stays an exact match on a verified email. `resolver/matching.py`
+  takes entities, has no principal path, and refuses the entity types where
+  being wrong would be a claim about a human.
+* **A model produces edges, never merges.** An edge is a row that
+  `forget_model_inferences()` deletes in one statement; a merge would have to
+  be reconstructed from raw_records.
+* **An inferred edge cannot widen visibility.** The graph walk joins
+  `visible_entities` at every hop, so it reorders what the asker can already
+  see and reaches nothing new.
+
+Every inference carries `provenance='model'` and `confidence < 1.0`, enforced
+by CHECK constraints on both the suggestion and the edge — so a model claiming
+certainty is refused by the database, not trusted and capped in Python alone.
+
+A person's accept or reject outranks any rerun, which is what stops the next
+pass silently overriding somebody who looked at a pair and said no.
+
+*Tested by:* `test_matching.py`, driven throughout by a model that agrees to
+everything with total confidence — including a run against the real permission
+filter proving it cannot surface a chunk the asker lacks a grant for.
+
 ---
 
 ## 5. What we deliberately do not defend against

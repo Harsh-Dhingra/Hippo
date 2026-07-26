@@ -149,6 +149,20 @@ Decision: resolver reads only `raw_records`, writes only graph tables. If resolu
 | 10 | Connectors are registered through entry points; capabilities are declared | `if kind ==` dispatch and `isinstance` checks | Never — both are unavailable for a class this process has never imported |
 | 11 | The write-back vocabulary is assembled from connectors | A literal in the agent | Never — a literal makes every third-party connector read-only |
 | 12 | A scheduled skill runs as a named principal | A service account with broad access | Never — that account's reach becomes every digest's reach |
+| 13 | Model-assisted matching produces edges, never merges | Merging entities on a model's judgement | Never — a merge cannot be filtered wholesale, and §6 promised it could be |
+| 14 | A model never decides person identity | Fuzzy-matching principals | Never — `identity_id` feeds the permission filter, so that is a model granting access |
+
+**On 13 and 14.** P3-RES-1. §6 promised model-inferred edges could be
+"distrusted or filtered wholesale", and only an additive claim can be: a merge
+rewrites the graph and undoing it means reconstructing from raw_records.
+`forget_model_inferences()` is one statement.
+
+What makes a model tolerable in the resolver at all is that the recursive walk
+in `visible_chunks()` joins `visible_entities` at every hop — an inferred edge
+can only reach something the asker already holds a grant for, so being wrong
+costs ranking and never confidentiality. `principals.identity_id` is *not*
+behind that guard, because it is upstream of it, which is why it stays an exact
+match on a verified email with no model involved.
 
 **On 12.** P3-AGT-2. A standing digest is the first read in this system with
 nobody present, and the permission filter answers "what may *you* see", so a

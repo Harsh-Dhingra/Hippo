@@ -59,6 +59,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "sessions": NONE,
         "auth_flows": NONE,
         "skill_schedules": NONE,
+        "entity_matches": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -85,6 +86,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "sessions": NONE,
         "auth_flows": NONE,
         "skill_schedules": NONE,
+        # Proposed identity matches. The resolver writes them; it cannot
+        # DELETE, because a rejected suggestion is the record of somebody
+        # having said no and a rerun must not erase it.
+        "entity_matches": frozenset({"SELECT", "INSERT", "UPDATE"}),
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -114,6 +119,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "sessions": NONE,
         "auth_flows": NONE,
         "skill_schedules": NONE,
+        "entity_matches": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -131,6 +137,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         # worker, because running a skill is a model call and the worker holds
         # source-system credentials — see migration 022.
         "skill_schedules": WRITE,
+        # A person accepts or rejects a proposed match. Not INSERT: proposing
+        # is the resolver's job, and an API that could mint its own would let
+        # a request assert an identity the resolver never inferred.
+        "entity_matches": frozenset({"SELECT", "UPDATE"}),
         # Approve and decline. Not INSERT: a proposal comes from the agent, and
         # an API that could mint its own would make the split decorative.
         "actions": frozenset({"SELECT", "UPDATE"}),
@@ -423,7 +433,10 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
     [
         ("hippo_agent", ["my_trace", "my_traces", "timeline", "visible_chunks"]),
         ("hippo_sync", ["project_acl_grants", "raise_alert"]),
-        ("hippo_resolver", []),
+        # The one function the resolver holds. "Distrusted or filtered
+        # wholesale" (ARCHITECTURE section 6) has to be one command, or nobody
+        # reaches for it under pressure.
+        ("hippo_resolver", ["forget_model_inferences"]),
         # The API serves the trace view and the approval buttons. It never
         # calls visible_chunks(): a query runs as hippo_agent instead.
         (
@@ -438,6 +451,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
                 "disable_user",
                 "ensure_personal_scope",
                 "my_action_events",
+                "my_entity_matches",
                 "my_notes",
                 "my_principals",
                 # Somebody's own standing questions. A list of other people's
