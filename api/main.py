@@ -14,7 +14,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Gauge, generate_latest
 from pydantic import BaseModel, Field
 
 from agent.links import load_directory
@@ -25,6 +25,7 @@ from api.routes import build_router
 from core.config import Settings, get_settings
 from core.db import Connection, Database, connect
 from core.logging import configure_logging
+from core.metrics import DatabaseCollector
 from core.migrate import MigrationError, status, upgrade
 from resolver.embeddings import build_provider as build_embeddings
 
@@ -122,9 +123,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         db.open(timeout=resolved.pool_open_timeout, wait=False)
         app.state.db = db
+        # State metrics — sync lag, queue depth, tokens spent — are read from
+        # the database when /metrics is scraped. A counter in this process
+        # could not report them: they outlive it, and a freshly booted process
+        # knows none of its own history.
+        collector = DatabaseCollector(db)
+        REGISTRY.register(collector)
         try:
             yield
         finally:
+            REGISTRY.unregister(collector)
             db.close()
 
     app = FastAPI(
