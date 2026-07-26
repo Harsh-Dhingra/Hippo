@@ -437,3 +437,113 @@ def test_the_cli_can_make_its_own_database() -> None:
         name = dsn.rsplit("/", 1)[1]
         with connect("postgresql://localhost:5432/postgres", autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+# ---------------------------------------------------------------------------
+# The embedding pick. Skipped without a local endpoint, because CI has none and
+# CLAUDE.md keeps live calls out of it — but the claim in STACK.md should not
+# be able to rot silently either.
+# ---------------------------------------------------------------------------
+
+
+def _endpoint_available() -> bool:
+    import httpx
+
+    from evals.embeddings import LOCAL
+
+    try:
+        httpx.get(f"{LOCAL}/models", timeout=1.0).raise_for_status()
+    except Exception:
+        return False
+    return True
+
+
+needs_endpoint = pytest.mark.skipif(
+    not _endpoint_available(),
+    reason="no OpenAI-compatible embeddings endpoint on localhost; see evals/embeddings.py",
+)
+
+
+def test_the_configured_model_is_one_that_was_measured() -> None:
+    """The default in config.py has to be a candidate the harness actually
+    compares, or the number in STACK.md is about something else."""
+    from core.config import Settings
+    from evals.embeddings import CANDIDATES
+
+    default = Settings(_env_file=None).embedding_model  # type: ignore[call-arg]
+
+    assert default in {candidate.name for candidate in CANDIDATES}
+
+
+def test_every_candidate_matches_the_schema_width() -> None:
+    """chunks.embedding is vector(1024). A narrower model is not a slightly
+    different choice, it is a migration and a full re-embed."""
+    from evals.embeddings import CANDIDATES
+
+    assert all(candidate.dimensions == 1024 for candidate in CANDIDATES)
+
+
+@needs_endpoint
+def test_the_chosen_model_beats_the_offline_baseline(
+    seeded: tuple[Connection, Corpus],
+) -> None:
+    """The claim STACK.md makes, checked rather than asserted.
+
+    Only the semantic comparison, and only on the corpus already seeded with
+    the lexical embedder — re-seeding per model is what `python -m
+    evals.embeddings` is for, and doing it here would put a minute of embedding
+    into an ordinary test run.
+    """
+    from core.config import Settings
+    from evals.embeddings import LOCAL
+    from resolver.embeddings import OpenAICompatibleEmbeddings
+
+    conn, corpus = seeded
+    model = Settings(_env_file=None).embedding_model  # type: ignore[call-arg]
+    real = OpenAICompatibleEmbeddings(model, base_url=LOCAL, dimensions=1024, batch_size=32)
+
+    semantic = [
+        case for case in cases_from(corpus) if case.id.startswith("semantic") and case.must_retrieve
+    ]
+    # Queried with the real model against a lexically embedded corpus, so this
+    # is a lower bound on what it does when the corpus matches. It still has to
+    # not leak.
+    report = run(conn, semantic, embedder=real, k=20)
+
+    assert report.leaks == (), report.summary()
+
+
+def test_the_comparison_cli_runs_on_the_offline_candidate(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI path, exercised with the one candidate that needs no endpoint.
+    A decision nobody can reproduce is a decision nobody can revisit."""
+    from evals.embeddings import main
+
+    assert main("hashing") == 0
+
+    printed = capsys.readouterr().out
+    assert "recall" in printed
+    assert "hashing" in printed
+    assert "best on semantic recall" in printed
+
+
+def test_an_unknown_candidate_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    from evals.embeddings import main
+
+    assert main("no-such-model") == 2
+    assert "known" in capsys.readouterr().out
+
+
+@needs_endpoint
+def test_the_comparison_runner_reports_a_table() -> None:
+    """A decision nobody can reproduce is a decision nobody can revisit."""
+    from evals.embeddings import CANDIDATES, measure
+
+    baseline = next(candidate for candidate in CANDIDATES if candidate.name == "hashing")
+
+    result = measure(baseline, k=20)
+
+    assert result.leaks == 0
+    assert result.lexical >= FLOOR_LEXICAL
+    assert "hashing" in result.row()

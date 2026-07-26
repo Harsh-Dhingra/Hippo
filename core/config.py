@@ -66,10 +66,11 @@ class Settings(BaseSettings):
     # lexical, not semantic; see resolver/embeddings.py.
     embedding_provider: EmbeddingProvider = Field(default="hashing")
     embedding_model: str = Field(
-        default="",
-        description="Required when embedding_provider is 'openai'. Left empty on purpose: "
-        "STACK.md defers the pick to a measured eval, and a guessed default would ship "
-        "an unmeasured one to every adopter.",
+        default="mxbai-embed-large",
+        description="Used when embedding_provider is 'openai'. Measured rather than guessed: "
+        "`python -m evals.embeddings` compares candidates on the seeded eval corpus, and "
+        "this one won on overall recall. 1024 dimensions, so it needs no migration. "
+        "Ignored by the default 'hashing' provider, which needs no endpoint at all.",
     )
     embedding_base_url: str = Field(
         default="https://api.openai.com/v1",

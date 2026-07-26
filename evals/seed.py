@@ -40,6 +40,7 @@ from uuid import UUID, uuid5
 from pydantic import BaseModel, ConfigDict
 
 from core.db import Connection
+from resolver.embeddings import EmbeddingProvider, HashingEmbeddings
 
 SEED = 20260725
 ORG_SCOPE = UUID("00000000-0000-0000-0000-000000000001")
@@ -120,7 +121,13 @@ class Corpus(BaseModel):
     members: dict[str, tuple[str, ...]]
 
 
-def build(conn: Connection, *, channels: int = 24, messages: int = 18) -> Corpus:
+def build(
+    conn: Connection,
+    *,
+    channels: int = 24,
+    messages: int = 18,
+    embedder: EmbeddingProvider | None = None,
+) -> Corpus:
     """Generate and insert the graph. Returns what it planted.
 
     Sized so that the vector mode's internal limit (k * 4) is well under the
@@ -128,6 +135,7 @@ def build(conn: Connection, *, channels: int = 24, messages: int = 18) -> Corpus
     returns everything is not being measured.
     """
     rng = random.Random(SEED)
+    embed = embedder if embedder is not None else HashingEmbeddings()
     connector_id = _id("connector")
 
     with conn.cursor() as cur:
@@ -170,7 +178,7 @@ def build(conn: Connection, *, channels: int = 24, messages: int = 18) -> Corpus
             key = f"{name}:{position}"
             entity = _entity(conn, "message", text[:60], key)
             _grant(conn, entity, [principals[person] for person in roster])
-            _chunk(conn, entity, text, key)
+            _chunk(conn, entity, text, key, embed)
             total_chunks += 1
 
             _edge(conn, entity, channel_entity, "belongs_to")
@@ -258,18 +266,19 @@ def _grant(conn: Connection, entity_id: UUID, principal_ids: list[UUID]) -> None
         )
 
 
-def _chunk(conn: Connection, entity_id: UUID, content: str, key: str) -> None:
-    """A deterministic embedding, so vector search behaves the same every run.
+def _chunk(
+    conn: Connection, entity_id: UUID, content: str, key: str, embedder: EmbeddingProvider
+) -> None:
+    """One chunk, embedded by whichever model is being evaluated.
 
-    The offline hashing embedder is what the rest of the project uses when no
-    model is configured, and using it here keeps the eval runnable with no API
-    key. Its vector numbers are a floor, not a forecast — it matches on shared
-    words, so the semantic cases are expected to be hard for it, and that is
-    the honest baseline a real embedding model gets compared against.
+    Parameterised because comparing embedding models means embedding the same
+    corpus with each of them and asking the same questions. A harness that
+    hardcoded one would be able to measure retrieval but never the thing
+    retrieval most depends on.
     """
-    from resolver.embeddings import HashingEmbeddings, to_pgvector
+    from resolver.embeddings import to_pgvector
 
-    (vector,) = HashingEmbeddings().embed([content])
+    (vector,) = embedder.embed([content])
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO chunks (id, entity_id, scope_id, content, embedding) "

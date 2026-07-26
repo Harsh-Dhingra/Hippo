@@ -223,7 +223,12 @@ def cases_from(corpus: object) -> tuple[Case, ...]:
                 id=f"{fact.kind}-{index}",
                 question=fact.question,
                 asker=roster[0],
-                must_retrieve=(fact.answer[:48],),
+                # The whole answer, never a prefix. Six paraphrases are reused
+                # across twenty-four channels, so a truncated needle matches a
+                # public twin of a private fact and reads as a leak. Every
+                # planted answer ends with its channel, which is what makes the
+                # full string unique.
+                must_retrieve=(fact.answer,),
                 tests=f"{fact.kind} retrieval",
             )
         )
@@ -236,7 +241,7 @@ def cases_from(corpus: object) -> tuple[Case, ...]:
                     question=fact.question,
                     asker=everyone,
                     must_retrieve=(),
-                    must_not_retrieve=(fact.answer[:48],),
+                    must_not_retrieve=(fact.answer,),
                     tests=f"{fact.kind} retrieval, from outside the channel",
                 )
             )

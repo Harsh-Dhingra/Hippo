@@ -18,7 +18,7 @@
 | Workflow / orchestration | **The jobs runtime + explicit state columns** | Temporal, Airflow, Prefect | A workflow genuinely needs >1-week durable timers or human-in-loop sagas beyond the actions table — none in Phases 1-3 |
 | Agent loop | **LangGraph (small graph), provider-abstracted models** | Custom planner-DAG framework, "better LangGraph" | The loop outgrows a small graph AND the eval harness shows planning is the bottleneck |
 | Model providers | **Anthropic + OpenAI-compatible day one; Ollama/vLLM path at P4-LOCAL-1** | Single-provider lock | n/a — pluggability is permanent |
-| Embeddings | **Config-abstracted; default: a current strong open-weights model, 1024-dim** (final pick at P1-RES-3 with a small eval) | Hardcoding a provider | Model deprecation or eval regression; re-embed is a resolver re-run, by design |
+| Embeddings | **Config-abstracted; `mxbai-embed-large`, 1024-dim, measured at P2-EVAL-1** (see below) | Hardcoding a provider | Model deprecation or eval regression; re-embed is a resolver re-run, by design |
 | API | **REST + OpenAPI. That's it.** | gRPC internal, GraphQL external, triple-protocol | A second first-party client (VS Code ext, CLI) demonstrates real REST pain — expected answer: never |
 | Frontend | **Next.js + TypeScript + Tailwind** (the one place the pasted doc and I agree) | Server-rendered Python templates, SPA frameworks du jour | n/a |
 | Deploy v0 | **docker compose: app + postgres. Two containers.** | K8s-first, Helm-first | Real multi-node adopters exist → charts at P4-ENT-2, compose stays forever as the front door |
@@ -44,3 +44,49 @@ Kafka, NATS, Temporal, Neo4j, Memgraph, Qdrant, OpenSearch, gRPC, GraphQL, Go-an
 - "Chat is one client, the API is the OS" → already ARCHITECTURE §SURFACE; affirmed.
 - Explainability path → already P1-AGT-4; affirmed.
 - Normalized event-stream connectors → structurally present (streams → raw_records, NOTIFY as bus); the Kafka form graduates at P4-SCALE-1 if ever.
+
+---
+
+## The embedding pick, measured
+
+This table deferred the choice "to a measured eval". The eval exists now
+(`evals/`), so here is the measurement and the decision, on the 432-chunk
+seeded corpus at k=20:
+
+| model | recall | MRR | lexical | semantic | traversal | embed time |
+|---|---|---|---|---|---|---|
+| `hashing` (offline default) | 0.756 | 0.392 | 1.00 | **0.33** | 0.75 | 1.0s |
+| **`mxbai-embed-large`** | **0.833** | 0.495 | 1.00 | **0.92** | 0.46 | 17.0s |
+| `bge-m3` | 0.767 | 0.527 | 1.00 | **1.00** | 0.12 | 51.5s |
+
+Reproduce with `python -m evals.embeddings` against any endpoint speaking the
+OpenAI `/embeddings` shape. Both candidates were run through Ollama, so this
+needs no account and no key.
+
+**Why `mxbai-embed-large`.** Best overall recall, 1024 dimensions so the
+`vector(1024)` column needs no migration, and three times faster to embed than
+`bge-m3` — which matters, because embedding is the slowest step of a full
+resync. `bge-m3` scores perfect semantic recall and the best MRR, and is the
+right answer for a multilingual corpus; it loses here on the total.
+
+**The finding worth carrying forward.** A better embedding model *costs*
+traversal recall: 0.75 with the lexical baseline, 0.46 with `mxbai`, 0.12 with
+`bge-m3`. Not a mistuned constant — sweeping the graph penalty across 10, 5, 2
+and 0 moved traversal not at all, and dropping it below 5 cost semantic recall
+instead. It is competition for a fixed k: a good embedder fills the top of the
+result set with genuinely relevant direct hits, and a chunk reachable only
+through an edge is legitimately outranked by them.
+
+Fixing that means not making graph expansion compete on the same budget —
+reserving slots, or a second retrieval pass — which is a design change and is
+recorded here rather than smuggled into a constant.
+
+**Why the default provider is still `hashing`.** Zero setup. `docker compose
+up` has to work on a machine with no inference endpoint and no key, and the
+demo has to be drivable in the first thirty seconds. The lexical baseline is
+poor at paraphrase and honest about it; switching to the measured model is two
+environment variables.
+
+**What would change this.** A model that beats 0.833 overall recall on the same
+corpus, or a corpus where the semantic and traversal numbers trade differently.
+Re-run the comparison; do not argue from a leaderboard.

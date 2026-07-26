@@ -337,10 +337,22 @@ def test_the_default_configuration_needs_no_service() -> None:
 
 
 def test_choosing_openai_without_a_model_is_rejected_in_config() -> None:
+    """The model now has a measured default (STACK.md), so reaching this needs
+    an explicit blank — which is exactly the shape of the mistake worth
+    catching: an operator who cleared the variable rather than unsetting it."""
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError, match="embedding_model is required"):
-        Settings(embedding_provider="openai", _env_file=None)  # type: ignore[call-arg]
+        Settings(  # type: ignore[call-arg]
+            embedding_provider="openai", embedding_model="", _env_file=None
+        )
+
+
+def test_the_default_model_satisfies_the_openai_provider() -> None:
+    """And the measured default is usable without configuring anything else."""
+    settings = Settings(embedding_provider="openai", _env_file=None)  # type: ignore[call-arg]
+
+    assert settings.embedding_model == "mxbai-embed-large"
 
 
 def test_configuring_openai_builds_the_http_provider() -> None:
