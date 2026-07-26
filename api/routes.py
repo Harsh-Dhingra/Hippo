@@ -28,11 +28,12 @@ the same response. A different one is a way to enumerate.
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.links import ConnectorDirectory, load_directory
@@ -40,6 +41,7 @@ from agent.loop import Agent
 from agent.timeline import build as build_timeline
 from agent.trace import list_traces, load_trace
 from api import approvals, auth, notes
+from core.audit import AuditEvent, events_for, to_csv, to_jsonl
 from core.db import Connection
 from resolver.embeddings import EmbeddingProvider
 
@@ -126,6 +128,22 @@ class QueryResponse(BaseModel):
     model: str
     input_tokens: int
     output_tokens: int
+
+
+class AuditEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action_id: UUID
+    at: datetime
+    from_status: str | None
+    to_status: str
+    actor: UUID | None
+    actor_policy: str | None
+    decided_by: str
+    action_type: str | None
+    risk_class: str | None
+    summary: str | None
 
 
 class MomentResponse(BaseModel):
@@ -514,6 +532,77 @@ def build_router(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such note") from exc
         except notes.NotYoursError as exc:
             raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+    # -- audit ---------------------------------------------------------------
+
+    def _events(
+        conn: Connection,
+        principal_id: UUID,
+        status_filter: str | None,
+        since: datetime | None,
+        limit: int,
+    ) -> list[AuditEvent]:
+        return events_for(conn, principal_id, status=status_filter, since=since, limit=limit)
+
+    @router.get(
+        "/audit",
+        tags=["audit"],
+        summary="Every transition, not just the current state",
+        description=(
+            "The actions table holds what an action is now. This holds how it "
+            "got there: who declined it before someone else approved, how long "
+            "it sat pending, what the payload said at the moment it was "
+            "approved. Append-only — no service role can edit or delete it."
+        ),
+    )
+    def get_audit(
+        conn: Conn,
+        principal_id: Principal,
+        event_status: str | None = None,
+        since: datetime | None = None,
+        limit: int = 200,
+    ) -> list[AuditEventResponse]:
+        return [
+            AuditEventResponse.model_validate(event)
+            for event in _events(conn, principal_id, event_status, since, limit)
+        ]
+
+    @router.get(
+        "/audit/export",
+        tags=["audit"],
+        summary="Download the log",
+        description=(
+            "CSV for a spreadsheet, JSONL for anything that needs the payload "
+            "snapshots. An audit that cannot leave the building is not "
+            "evidence."
+        ),
+    )
+    def export_audit(
+        conn: Conn,
+        principal_id: Principal,
+        fmt: str = "csv",
+        event_status: str | None = None,
+        since: datetime | None = None,
+        limit: int = 5000,
+    ) -> Response:
+        if fmt not in ("csv", "jsonl"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "format must be csv or jsonl")
+        events = _events(conn, principal_id, event_status, since, limit)
+        stamp = datetime.now(UTC).strftime("%Y%m%d")
+
+        if fmt == "csv":
+            return Response(
+                content=to_csv(events),
+                media_type="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="hippo-audit-{stamp}.csv"'},
+            )
+        # Streamed: an export is the request most likely to be large, and
+        # assembling a year of it in memory is how this becomes an outage.
+        return StreamingResponse(
+            to_jsonl(events),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="hippo-audit-{stamp}.jsonl"'},
+        )
 
     # -- timeline ------------------------------------------------------------
 

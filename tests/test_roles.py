@@ -57,6 +57,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "trace_retrievals": NONE,
         "users": NONE,
         "sessions": NONE,
+        "action_events": NONE,
     },
     "hippo_resolver": {
         "raw_records": READ,
@@ -79,6 +80,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "trace_retrievals": NONE,
         "users": NONE,
         "sessions": NONE,
+        "action_events": NONE,
     },
     "hippo_agent": {
         "actions": frozenset({"INSERT"}),
@@ -104,6 +106,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "schema_migrations": NONE,
         "users": NONE,
         "sessions": NONE,
+        "action_events": NONE,
     },
     # Serves people: logins, approvals, and enough to render one. It reads no
     # content — a query runs under SET LOCAL ROLE hippo_agent, so a prompt
@@ -140,6 +143,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         # the agent writes them with.
         "query_traces": NONE,
         "trace_retrievals": NONE,
+        # Append-only. The trigger writes it as the owner; no service role holds
+        # INSERT, UPDATE or DELETE, because a log the application can rewrite
+        # answers "what do we currently claim happened".
+        "action_events": NONE,
     },
 }
 
@@ -403,6 +410,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
             "hippo_api",
             [
                 "ensure_personal_scope",
+                "my_action_events",
                 "my_notes",
                 "my_principals",
                 "my_scopes",

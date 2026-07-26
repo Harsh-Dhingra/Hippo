@@ -724,6 +724,8 @@ def test_the_openapi_document_covers_every_v1_route(client: TestClient) -> None:
         "/api/v1/notes/{note_id}",
         "/api/v1/notes/{note_id}/pin",
         "/api/v1/notes/{note_id}/supersede",
+        "/api/v1/audit",
+        "/api/v1/audit/export",
         "/api/v1/scopes",
         "/api/v1/timeline/{entity_id}",
         "/api/v1/traces",
@@ -1007,3 +1009,72 @@ def test_a_timeline_for_something_invisible_is_empty(client: TestClient, world: 
 
     assert response.status_code == 200
     assert response.json()["moments"] == []
+
+
+# ---------------------------------------------------------------------------
+# Audit (P2-GOV-2), over HTTP.
+# ---------------------------------------------------------------------------
+
+
+def test_the_audit_log_shows_transitions(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    auth_headers = headers(client, ALICE_EMAIL)
+    proposal = propose(client, world, model)["proposal"]
+    client.post(f"/api/v1/actions/{proposal['id']}/approve", headers=auth_headers)
+
+    events = client.get("/api/v1/audit", headers=auth_headers).json()
+
+    transitions = [(e["from_status"], e["to_status"]) for e in events]
+    assert (None, "pending") in transitions
+    assert ("pending", "approved") in transitions
+
+
+def test_the_audit_log_can_be_filtered(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    auth_headers = headers(client, ALICE_EMAIL)
+    proposal = propose(client, world, model)["proposal"]
+    client.post(f"/api/v1/actions/{proposal['id']}/approve", headers=auth_headers)
+
+    approvals_only = client.get("/api/v1/audit?event_status=approved", headers=auth_headers).json()
+
+    assert [e["to_status"] for e in approvals_only] == ["approved"]
+
+
+def test_the_audit_log_is_scoped_to_the_reader(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    propose(client, world, model)
+
+    assert client.get("/api/v1/audit", headers=headers(client, CAROL_EMAIL)).json() == []
+
+
+def test_exporting_as_csv(client: TestClient, world: Connection, model: ScriptedModel) -> None:
+    propose(client, world, model)
+
+    response = client.get("/api/v1/audit/export?fmt=csv", headers=headers(client, ALICE_EMAIL))
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+    assert response.text.startswith("at,action_id,from_status,to_status")
+
+
+def test_exporting_as_jsonl(client: TestClient, world: Connection, model: ScriptedModel) -> None:
+    """The format that carries the payload snapshots."""
+    import json as json_module
+
+    propose(client, world, model)
+
+    response = client.get("/api/v1/audit/export?fmt=jsonl", headers=headers(client, ALICE_EMAIL))
+
+    assert response.status_code == 200
+    first = json_module.loads(response.text.strip().split("\n")[0])
+    assert first["snapshot"]["payload"]["body"] == "legal review"
+
+
+def test_an_unknown_export_format_is_refused(client: TestClient, world: Connection) -> None:
+    response = client.get("/api/v1/audit/export?fmt=parquet", headers=headers(client, ALICE_EMAIL))
+
+    assert response.status_code == 400

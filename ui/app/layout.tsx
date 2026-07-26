@@ -32,6 +32,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               Actions
             </Link>
             <Link
+              href="/audit"
+              className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              Audit
+            </Link>
+            <Link
               href="/traces"
               className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             >

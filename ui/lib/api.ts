@@ -149,6 +149,21 @@ export type Action = {
   created_at: string;
 };
 
+export type AuditEvent = {
+  id: number;
+  action_id: string;
+  at: string;
+  from_status: string | null;
+  to_status: string;
+  actor: string | null;
+  /** Set when a written policy stood in for a click. Never both. */
+  actor_policy: string | null;
+  decided_by: string;
+  action_type: string | null;
+  risk_class: string | null;
+  summary: string | null;
+};
+
 export type Scope = {
   id: string;
   scope_type: string;
