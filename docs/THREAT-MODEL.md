@@ -310,6 +310,40 @@ pass silently overriding somebody who looked at a pair and said no.
 everything with total confidence — including a run against the real permission
 filter proving it cannot surface a chunk the asker lacks a grant for.
 
+### 4.12 A forged or replayed Slack request (A3)
+
+These endpoints will approve a write into Jira, so an unverified one is not a
+surface, it is a hole. Every request is checked against Slack's HMAC over the
+version, the timestamp and the **raw** body — re-serialising a parsed form
+produces a different string and the mismatch would be intermittent rather than
+total. Signatures older or newer than five minutes are refused, so one lifted
+from a log or a proxy is not a standing key, and the comparison is
+constant-time.
+
+There is no development mode that skips verification. Absent a signing secret
+the endpoints are not mounted, because the mode that skips it is the mode that
+reaches production.
+
+**Approving from Slack is allowed; approving from MCP is not.** The difference
+is not the protocol, it is who clicks. Slack's interactive payload names the
+human who pressed the button, and `api/approvals.py` checks that they are the
+person the action belongs to — refusing identically whether it is somebody
+else's, already decided, or gone, so nobody can probe for what others proposed.
+An MCP caller is a model, and a model approving its own proposal would make
+rule 2 decorative.
+
+**An answer never goes to the channel.** This is the leak that would arrive
+dressed as a feature: Hippo filters an answer to what the asking person may
+read, and posting it into #general shows it to everybody in #general. Every
+response is `ephemeral`, and `response_type` is not a parameter any caller can
+set. A Slack user with no linked principal is told so rather than given an
+empty answer, because "you can see nothing" and "nothing matched" are different
+facts.
+
+*Tested by:* `test_slack_surface.py`, including forged, replayed, future-dated
+and unsigned requests, and an isolation test driven by a model that echoes
+every source it is shown.
+
 ---
 
 ## 5. What we deliberately do not defend against

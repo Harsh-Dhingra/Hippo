@@ -89,6 +89,16 @@ class Settings(BaseSettings):
         "parse is refused rather than skipped, so a typo is visible at startup.",
     )
 
+    # --- Slack surface ----------------------------------------------------
+    # Off unless a signing secret is set. There is deliberately no development
+    # mode that skips verification: a Slack webhook endpoint that does not
+    # check signatures will approve a write into Jira for anybody who asks.
+    slack_signing_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="From Slack's app settings. Empty disables the Slack surface entirely; "
+        "the endpoints are not mounted rather than mounted and unguarded.",
+    )
+
     # --- Single sign-on ---------------------------------------------------
     # Off unless an issuer is set, because a self-hosted install has to work on
     # a laptop with no IdP in front of it. See api/oidc.py for what is verified.

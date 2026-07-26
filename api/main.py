@@ -34,6 +34,7 @@ from core.logging import configure_logging
 from core.metrics import DatabaseCollector
 from core.migrate import MigrationError, status, upgrade
 from resolver.embeddings import build_provider as build_embeddings
+from surfaces.slack.router import build_router as build_slack_router
 
 LOG = logging.getLogger("hippo.api")
 
@@ -280,6 +281,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(
         build_router(_LazyDatabase(app), agent, build_embeddings(resolved), resolved)
     )
+
+    # Mounted only when a signing secret exists. Not mounted-and-unguarded:
+    # a Slack webhook endpoint that does not verify signatures will approve a
+    # write into Jira for anybody who finds the URL, so the absence of a secret
+    # removes the endpoints rather than weakening them.
+    slack_secret = resolved.slack_signing_secret.get_secret_value()
+    if slack_secret:
+        database = _LazyDatabase(app)
+        app.include_router(
+            build_slack_router(database.connection, agent, as_agent, slack_secret),
+            prefix="/api/v1",
+        )
+        LOG.info("slack surface mounted")
 
     @app.middleware("http")
     async def _count_requests(
