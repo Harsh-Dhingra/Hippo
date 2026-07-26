@@ -33,6 +33,7 @@ hippo-new-connector = "sync.connectors.scaffold:main"
 [project.entry-points."hippo.connectors"]
 slack = "sync.connectors.builtin:SLACK"
 jira = "sync.connectors.builtin:JIRA"
+github = "sync.connectors.builtin:GITHUB"
 
 [dependency-groups]
 dev = [

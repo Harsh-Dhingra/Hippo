@@ -273,7 +273,7 @@ def test_a_connector_from_the_future_is_refused_at_registration() -> None:
 
 
 def test_an_unregistered_kind_names_what_is_available() -> None:
-    with pytest.raises(LookupError, match="registered: jira, slack"):
+    with pytest.raises(LookupError, match="registered: github, jira, slack"):
         registry.plugin_for("dropbox")
 
 

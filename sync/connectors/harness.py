@@ -330,8 +330,18 @@ def _check_writeback(
                 "writeback",
             )
 
+        # What the runtime hands back at rollback time, not what the connector
+        # returned at capture time. sync/writeback.py folds the receipt's
+        # external id into the stored inverse, because a create-shaped action's
+        # rollback needs the id of the thing that was created and no amount of
+        # looking beforehand can know it. A harness that skipped this step would
+        # test a path production never takes, and would fail correct connectors.
+        stored = dict(inverse)
+        if receipt.external_id is not None:
+            stored["created_id"] = receipt.external_id
+
         try:
-            connector.rollback(case.request, inverse)
+            connector.rollback(case.request, stored)
         except Exception as exc:
             report.fail("rollback_succeeds", f"case {index}: {exc!r}", "writeback")
             continue

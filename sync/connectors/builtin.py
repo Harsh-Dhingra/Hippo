@@ -15,6 +15,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from sync.connectors.github.actions import ACTIONS as GITHUB_ACTIONS
+from sync.connectors.github.connector import GitHubConnector
+from sync.connectors.github.transport import HttpTransport as GitHubHttp
 from sync.connectors.jira.actions import ACTIONS as JIRA_ACTIONS
 from sync.connectors.jira.connector import JiraConnector
 from sync.connectors.jira.transport import HttpTransport as JiraHttp
@@ -25,6 +28,7 @@ from sync.connectors.slack.transport import HttpTransport as SlackHttp
 
 SLACK_SCHEMA_VERSION = "2026-07-01"
 JIRA_SCHEMA_VERSION = "2026-07-01"
+GITHUB_SCHEMA_VERSION = "2026-07-01"
 
 
 def _build_slack(config: Mapping[str, Any], token: str) -> ReadConnector:
@@ -63,7 +67,26 @@ JIRA = ConnectorPlugin(
     requires_config=("base_url", "email"),
 )
 
-PLUGINS = (SLACK, JIRA)
+
+def _build_github(config: Mapping[str, Any], token: str) -> ReadConnector:
+    return GitHubConnector(GitHubHttp(token), str(config["org"]))
+
+
+GITHUB = ConnectorPlugin(
+    kind="github",
+    display_name="GitHub",
+    capabilities=Capabilities(
+        kind="github",
+        schema_version=GITHUB_SCHEMA_VERSION,
+        actions=GITHUB_ACTIONS,
+    ),
+    build=_build_github,
+    # Which organisation. There is no sensible default and guessing would sync
+    # somebody else's public repositories.
+    requires_config=("org",),
+)
+
+PLUGINS = (SLACK, JIRA, GITHUB)
 
 
 def register_builtins() -> None:

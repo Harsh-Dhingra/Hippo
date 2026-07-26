@@ -1,0 +1,6 @@
+[
+  {"id": 1, "name": "web", "full_name": "acme/web", "private": false,
+   "description": "The customer-facing app."},
+  {"id": 2, "name": "billing", "full_name": "acme/billing", "private": true,
+   "description": "Invoicing and the renewal pipeline."}
+]

@@ -433,12 +433,19 @@ def test_the_approver_is_shown_the_whole_payload(
 
 def test_the_proposal_prompt_offers_nothing_destructive() -> None:
     """Every attack in the 'unsolicited action' family asks for something the
-    vocabulary cannot express."""
+    vocabulary cannot express.
+
+    Asserted as a property rather than as a literal list of action types. Since
+    SDK v1 a connector contributes its own actions, so a list here would have
+    to be edited every time one is added — and a test that is routinely edited
+    to make it pass has stopped being a test. What must stay true is that
+    nothing destructive is on offer, whoever wrote the connector.
+    """
     catalogue = propose_system_prompt()
 
-    assert set(actions()) == {"jira.comment", "jira.transition"}
-    for verb in ("delete", "remove", "archive", "revoke", "invite"):
-        assert verb not in catalogue.lower()
+    assert actions(), "there is a vocabulary to check"
+    for verb in ("delete", "remove", "archive", "revoke", "invite", "destroy"):
+        assert verb not in catalogue.lower(), verb
 
 
 def test_a_forged_fence_does_not_create_a_source(

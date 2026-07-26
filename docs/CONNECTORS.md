@@ -228,9 +228,10 @@ Every check corresponds to a way a connector silently loses or duplicates data:
 notion = "hippo_notion:PLUGIN"
 ```
 
-Install alongside Hippo and it is discovered. The built-in Slack and Jira
-connectors register through this same group — no private path — so the mechanism
-your connector depends on is the one Hippo exercises every time it starts.
+Install alongside Hippo and it is discovered. The built-in Slack, Jira and
+GitHub connectors register through this same group — no private path — so the
+mechanism your connector depends on is the one Hippo exercises every time it
+starts.
 
 ---
 

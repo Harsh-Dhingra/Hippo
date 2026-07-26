@@ -1,0 +1,8 @@
+[
+  {"number": 1, "id": 501, "node_id": "I_web_1", "state": "open", "comments": 1,
+   "title": "Checkout fails on Safari",
+   "body": "Reported by three customers this week. The payment iframe never loads."},
+  {"number": 2, "id": 502, "node_id": "I_web_2", "state": "closed", "comments": 0,
+   "title": "Upgrade the design system",
+   "body": "Done in the January release."}
+]
