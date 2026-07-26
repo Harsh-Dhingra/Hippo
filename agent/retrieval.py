@@ -131,9 +131,14 @@ def retrieve(
     agent and the resolver share one embeddings module instead of each
     configuring their own.
     """
+    # Blank means browse: "what can I see", which migration 003 supports when
+    # neither query input is given. The filter tests for NULL, so an empty
+    # string would ask for everything matching nothing and get nothing back.
+    query_text = plan.query_text.strip() or None
+
     embedding: str | None = None
-    if plan.use_vector and embedder is not None:
-        (vector,) = embedder.embed([plan.query_text])
+    if plan.use_vector and embedder is not None and query_text is not None:
+        (vector,) = embedder.embed([query_text])
         embedding = to_pgvector(vector)
 
     with conn.cursor() as cur:
@@ -141,7 +146,7 @@ def retrieve(
             "SELECT chunk_id, entity_id, entity_type, entity_title, content, score, "
             "       retrieval_modes, connector_id, source_type, source_id "
             "FROM visible_chunks(%s, %s, %s::vector, %s, %s)",
-            (principal_id, plan.query_text, embedding, plan.k, plan.hops),
+            (principal_id, query_text, embedding, plan.k, plan.hops),
         )
         rows = cur.fetchall()
 

@@ -84,6 +84,26 @@ PARAPHRASES = (
     ("what is the fault", "the defect lies in the caching layer"),
 )
 
+# Real messages that will never answer a question. Present because a corpus
+# without them cannot measure curation: demoting noise only helps if there is
+# noise to demote, and a generator that produced only useful content would make
+# P2-MEM-2 look like it did nothing.
+NOISE = (
+    "+1",
+    "thanks",
+    "lgtm",
+    "ok",
+    ":shipit:",
+    "haha",
+    "on it",
+    "same",
+)
+
+# One sentence repeated everywhere: a signature, a bot footer, a standing
+# reminder. Individually harmless, collectively a wall between a question and
+# its answer.
+BOILERPLATE = "This channel is archived nightly. See the handbook for retention policy."
+
 FILLER = (
     "standup notes for the week ahead",
     "reminder about the office move",
@@ -236,6 +256,13 @@ def _message(
             channel=channel,
             private=private,
         )
+
+    # Noise and boilerplate, at roughly the density a real workspace has. The
+    # positions are fixed rather than random so the corpus stays reproducible.
+    if position in (1, 5, 9, 14):
+        return NOISE[(channel_index + position) % len(NOISE)], None
+    if position in (2, 16):
+        return BOILERPLATE, None
 
     return f"{rng.choice(FILLER)} ({channel} {position})", None
 

@@ -14,6 +14,21 @@ Two floors, and they mean different things. `recall_at_k` is a quality bar that
 should ratchet upward as retrieval improves, the way coverage does. `leaks` is
 not a bar at all — it is zero, and a single one is a release-blocking bug
 rather than a regression in a metric.
+
+**Recall here is approximate, and the floors carry margin because of it.** The
+vector index is HNSW (`chunks_embedding_idx`), which is an approximate nearest
+neighbour structure: it trades exactness for speed, and the graph it searches
+depends on the order rows went in. Rewriting the chunks table — a curation
+pass, a re-embed, a restore — can therefore move recall a point or two without
+anything in retrieval having changed.
+
+The practical consequence is that a small delta between two runs is not
+evidence of anything. Two numbers are only comparable if they came from the
+same table state, which means an experiment that claims an improvement has to
+apply and reverse the change over identical rows rather than compare a run
+before a rewrite to a run after one. A measured example: curation appeared to
+lift recall@20 from 0.756 to 0.789 until it was run as a controlled pair, at
+which point the delta was 0.0000 at every k.
 """
 
 from __future__ import annotations
