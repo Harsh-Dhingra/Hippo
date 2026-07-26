@@ -29,6 +29,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from agent.policy import RiskPolicy
 from core.db import Connection
 from core.jobs import enqueue
 from sync.writeback import ROLLBACK_KIND
@@ -69,6 +70,9 @@ class Action(BaseModel):
     connector_kind: str
     requested_by: UUID
     approved_by: UUID | None
+    # Set when a written policy stood in for a click. Never both: the audit log
+    # has to be able to answer which actions a human actually looked at.
+    approved_by_policy: str | None
     declined_by: UUID | None
     executed_at: Any | None
     rolled_back_by: UUID | None
@@ -90,7 +94,7 @@ _MINE = "SELECT principal_id FROM my_principals(%s)"
 _SELECT = (
     "SELECT a.id, a.action_type, a.status, a.risk_class, a.payload, a.target_entity, "
     "       a.summary, a.connector_id, c.kind, a.requested_by, a.approved_by, a.declined_by, "
-    "       a.executed_at, a.rolled_back_by, a.error, a.created_at "
+    "       a.executed_at, a.rolled_back_by, a.error, a.created_at, a.approved_by_policy "
     "FROM actions a "
     "JOIN connectors c ON c.id = a.connector_id "
 )
@@ -114,6 +118,7 @@ def _row(row: Any) -> Action:
         rolled_back_by=None if row[13] is None else UUID(str(row[13])),
         error=row[14],
         created_at=row[15],
+        approved_by_policy=None if row[16] is None else str(row[16]),
     )
 
 
@@ -219,6 +224,85 @@ def request_rollback(conn: Connection, principal_id: UUID, action_id: UUID) -> A
         extra={"action_id": str(action_id), "requested_by": str(principal_id)},
     )
     return action
+
+
+def auto_approve_pending(conn: Connection, policy: RiskPolicy) -> list[UUID]:
+    """Let an operator's written policy stand in for a person's click.
+
+    Runs here rather than in the sync worker, and that is the load-bearing
+    choice. The worker holds the credentials and does the executing; letting it
+    also approve would collapse propose, approve and execute into one component,
+    which is the thing rule 2 exists to prevent. This role represents people and
+    holds no source-system credential, so what decides still cannot be what
+    acts — and migration 017 enforces it with a column grant rather than a
+    convention.
+
+    Every action is re-checked against the file at approval time, not at
+    proposal time. An operator who removes a type from the policy stops
+    unattended approvals immediately, including for actions already waiting.
+    """
+    if not policy.auto_approve.enabled:
+        return []
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.id, a.action_type, a.requested_by, lower(btrim(p.email)) "
+            "FROM actions a JOIN principals p ON p.id = a.requested_by "
+            "WHERE a.status = 'pending' ORDER BY a.created_at",
+        )
+        waiting = cur.fetchall()
+
+    if not waiting:
+        return []
+
+    used_globally, used_by = _recent_auto_approvals(conn)
+    approved: list[UUID] = []
+
+    for action_id, action_type, requester, email in waiting:
+        if not policy.may_auto_approve(str(action_type), None if email is None else str(email)):
+            continue
+        # Both caps are checked against what has already happened *and* what
+        # this sweep has approved so far, or a single sweep over a large
+        # backlog would blow through the hourly limit in one pass.
+        if used_globally >= policy.auto_approve.max_per_hour:
+            LOG.warning(
+                "auto-approval hourly cap reached", extra={"cap": policy.auto_approve.max_per_hour}
+            )
+            break
+        if used_by.get(requester, 0) >= policy.auto_approve.max_per_principal_per_hour:
+            continue
+
+        rule = f"auto_approve:{action_type}"
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE actions SET status = 'approved', approved_by_policy = %s "
+                "WHERE id = %s AND status = 'pending'",
+                (rule, action_id),
+            )
+            if cur.rowcount == 0:
+                continue
+
+        approved.append(UUID(str(action_id)))
+        used_globally += 1
+        used_by[requester] = used_by.get(requester, 0) + 1
+        LOG.info(
+            "action approved by policy",
+            extra={"action_id": str(action_id), "rule": rule},
+        )
+
+    return approved
+
+
+def _recent_auto_approvals(conn: Connection) -> tuple[int, dict[Any, int]]:
+    """What the last hour has already spent, globally and per requester."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT requested_by, count(*) FROM actions "
+            "WHERE approved_by_policy IS NOT NULL AND created_at > now() - interval '1 hour' "
+            "GROUP BY requested_by"
+        )
+        per_principal = {row[0]: int(row[1]) for row in cur.fetchall()}
+    return sum(per_principal.values()), per_principal
 
 
 def _explain_failure(conn: Connection, principal_id: UUID, action_id: UUID) -> None:

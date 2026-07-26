@@ -37,7 +37,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "principals": WRITE,
         "principal_memberships": WRITE,
         "acl_grants": WRITE,
-        "actions": frozenset({"SELECT", "UPDATE"}),
+        # Table-level. Migration 017 narrowed UPDATE to specific columns so the
+        # executing role cannot also approve; see the column-grant test below,
+        # which has_table_privilege cannot see.
+        "actions": READ,
         "entities": READ,
         "entity_sources": READ,
         "jobs": WRITE,
@@ -467,3 +470,84 @@ def test_psycopg_reports_privilege_errors_as_expected(migrated: Connection) -> N
     with as_role(migrated, "hippo_agent"), pytest.raises(psycopg.Error) as caught:
         migrated.execute("SELECT * FROM chunks")
     assert caught.value.sqlstate == "42501"
+
+
+# ---------------------------------------------------------------------------
+# Column-level grants, which has_table_privilege above cannot see.
+# ---------------------------------------------------------------------------
+
+# What the executing role may write on an action. Everything here is a fact
+# about an execution that already happened; nothing here is a decision to let
+# one happen. That split is what stops propose, approve and execute collapsing
+# into one component (migration 017).
+SYNC_MAY_UPDATE = frozenset(
+    {
+        "status",
+        "executed_at",
+        "inverse_payload",
+        "receipt",
+        "error",
+        "execution_started_at",
+        "rolled_back_at",
+        "rolled_back_by",
+    }
+)
+
+
+def column_grants(conn: Connection, role: str, table: str, privilege: str) -> frozenset[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.column_privileges "
+            "WHERE grantee = %s AND table_name = %s AND privilege_type = %s",
+            (role, table, privilege),
+        )
+        return frozenset(str(row[0]) for row in cur.fetchall())
+
+
+def test_the_executing_role_may_only_write_execution_columns(migrated: Connection) -> None:
+    """The boundary migration 017 introduced, pinned exactly.
+
+    A table-level grant would have been invisible to this file's other tests,
+    because has_table_privilege reports nothing about columns. This is what
+    stops a future migration quietly handing the worker back the whole row.
+    """
+    granted = column_grants(migrated, "hippo_sync", "actions", "UPDATE")
+
+    assert granted == SYNC_MAY_UPDATE
+
+
+def test_the_executing_role_cannot_write_either_approval_column(migrated: Connection) -> None:
+    """Stated separately from the set above, because these two columns are the
+    entire point of the split and deserve to fail with their own name."""
+    granted = column_grants(migrated, "hippo_sync", "actions", "UPDATE")
+
+    assert "approved_by" not in granted
+    assert "approved_by_policy" not in granted
+
+
+def test_the_role_that_represents_people_may_approve(migrated: Connection) -> None:
+    """The other half. hippo_api holds table-level UPDATE and no source-system
+    credential, so what decides cannot be what acts."""
+    with migrated.cursor() as cur:
+        cur.execute("SELECT has_table_privilege('hippo_api', 'actions', 'UPDATE')")
+        assert cur.fetchone() == (True,)
+
+
+def test_no_role_holds_an_unexpected_column_grant(migrated: Connection) -> None:
+    """Column grants are the shape of privilege this file was previously blind
+    to, so they get their own sweep rather than a single assertion."""
+    with migrated.cursor() as cur:
+        cur.execute(
+            "SELECT grantee, table_name, privilege_type, count(*) "
+            "FROM information_schema.column_privileges "
+            "WHERE grantee = ANY(%s) "
+            "  AND NOT EXISTS (SELECT 1 FROM information_schema.table_privileges t "
+            "                  WHERE t.grantee = column_privileges.grantee "
+            "                    AND t.table_name = column_privileges.table_name "
+            "                    AND t.privilege_type = column_privileges.privilege_type) "
+            "GROUP BY 1, 2, 3 ORDER BY 1, 2, 3",
+            (list(ROLES),),
+        )
+        column_only = [(str(r[0]), str(r[1]), str(r[2])) for r in cur.fetchall()]
+
+    assert column_only == [("hippo_sync", "actions", "UPDATE")], column_only

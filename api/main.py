@@ -8,8 +8,10 @@ needs a database, and building the app must not require one: an unreachable
 database is something /healthz reports, not something that stops the process.
 """
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractContextManager, asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, suppress
 from typing import Literal
 
 from fastapi import FastAPI, Request, Response
@@ -21,6 +23,7 @@ from agent.links import load_directory
 from agent.loop import Agent
 from agent.policy import load_policy
 from agent.providers import build_provider
+from api.approvals import auto_approve_pending
 from api.routes import build_router
 from core.config import Settings, get_settings
 from core.db import Connection, Database, connect
@@ -28,6 +31,8 @@ from core.logging import configure_logging
 from core.metrics import DatabaseCollector
 from core.migrate import MigrationError, status, upgrade
 from resolver.embeddings import build_provider as build_embeddings
+
+LOG = logging.getLogger("hippo.api")
 
 REQUESTS = Counter(
     "hippo_http_requests_total",
@@ -89,6 +94,37 @@ def _check_health(db: Database) -> tuple[HealthResponse, int]:
     ), 200
 
 
+async def _sweep(db: Database, settings: Settings) -> None:
+    """Apply the operator's policy to whatever is waiting.
+
+    Silent and cheap when auto-approval is off, which is the default: the
+    policy is checked before any query runs. Failures are logged and the loop
+    continues — a governance sweep that died on one bad tick would stop
+    approving without anyone noticing, which is worse than the tick failing.
+    """
+    policy = load_policy(settings.risk_policy_path)
+    if not policy.auto_approve.enabled:
+        LOG.info("auto-approval is off; every action waits for a person")
+        return
+
+    LOG.warning(
+        "auto-approval is on",
+        extra={
+            "action_types": sorted(policy.auto_approve.action_types),
+            "max_per_hour": policy.auto_approve.max_per_hour,
+        },
+    )
+    while True:
+        await asyncio.sleep(settings.auto_approve_interval_seconds)
+        try:
+            with db.connection(timeout=5.0) as conn:
+                approved = auto_approve_pending(conn, policy)
+            if approved:
+                LOG.info("policy approved actions", extra={"count": len(approved)})
+        except Exception as exc:
+            LOG.error("auto-approval sweep failed", extra={"error": str(exc)})
+
+
 class _LazyDatabase:
     """Defers to app.state.db, which the lifespan sets.
 
@@ -129,9 +165,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # knows none of its own history.
         collector = DatabaseCollector(db)
         REGISTRY.register(collector)
+
+        # Auto-approval runs here rather than in the sync worker. The worker
+        # holds the credentials and does the executing; letting it also approve
+        # would collapse propose, approve and execute into one component. This
+        # process represents people and holds no source-system credential, so
+        # what decides still cannot be what acts.
+        sweeper = asyncio.create_task(_sweep(db, resolved))
         try:
             yield
         finally:
+            sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweeper
             REGISTRY.unregister(collector)
             db.close()
 

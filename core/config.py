@@ -53,6 +53,12 @@ class Settings(BaseSettings):
         description="TOML file classifying action types as routine or consequential. "
         "Absent means the safest policy there is: everything waits for a human.",
     )
+    auto_approve_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="How often the API applies the risk policy to pending actions. "
+        "Only runs at all when the policy opts in; see agent/policy.py.",
+    )
     migrate_on_startup: bool = Field(
         default=True,
         description="Apply pending migrations when the API boots. Keeps `docker compose up` "

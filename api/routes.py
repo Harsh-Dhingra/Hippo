@@ -202,6 +202,7 @@ class ActionResponse(BaseModel):
     connector_kind: str
     requested_by: UUID
     approved_by: UUID | None
+    approved_by_policy: str | None
     declined_by: UUID | None
     rolled_back_by: UUID | None
     error: str | None
