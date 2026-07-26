@@ -194,11 +194,36 @@ their own inference endpoint has not really self-hosted anything.
 - [docs/STACK.md](docs/STACK.md) — every stack choice, with the measured trigger
   that would change it
 - [docs/PROJECT.md](docs/PROJECT.md) — the roadmap as a fragment tree
+- [docs/BENCHMARK.md](docs/BENCHMARK.md) — what we measured, including the bad
+  numbers
+- [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) — each attack, and what
+  structurally prevents it
 - [CLAUDE.md](CLAUDE.md) — the rules this codebase is written under
 
 Start with [core/migrations/003_visible_chunks.sql](core/migrations/003_visible_chunks.sql).
 It is the load-bearing code of the whole project, and everything else can be
 rewritten.
+
+---
+
+## Contributing
+
+The fastest useful contribution is a connector:
+
+```
+hippo-new-connector notion --out ~/src
+cd ~/src/hippo-notion && pip install -e . && pytest
+```
+
+That generates a package which already passes the conformance suite, and
+installs alongside Hippo through an entry point — nothing here has to change for
+yours to work.
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the review bar, and
+[docs/CONNECTORS.md](docs/CONNECTORS.md) has the guide. Both lead with the same
+thing, because it is the one that matters: get the ACL grain right before you
+get anything else right. Every other bug in a connector produces a worse answer.
+That one produces an answer somebody was not allowed to see.
 
 ---
 
