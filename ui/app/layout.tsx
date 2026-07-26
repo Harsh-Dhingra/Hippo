@@ -43,6 +43,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             >
               Traces
             </Link>
+            <Link
+              href="/alerts"
+              className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              Alerts
+            </Link>
             <form action="/api/session/logout" method="post" className="ml-auto">
               <button
                 type="submit"

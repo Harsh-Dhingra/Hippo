@@ -149,6 +149,20 @@ export type Action = {
   created_at: string;
 };
 
+export type Alert = {
+  id: string;
+  kind: string;
+  connector: string | null;
+  stream: string | null;
+  detail: string;
+  headline: string;
+  occurrences: number;
+  /** One failure is a blip. Repeats are an outage. */
+  is_recurring: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+};
+
 export type AuditEvent = {
   id: number;
   action_id: string;

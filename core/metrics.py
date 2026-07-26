@@ -84,6 +84,18 @@ QUERIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "FROM query_traces WHERE provider IS NOT NULL GROUP BY 1, 2",
         ("provider", "model"),
     ),
+    "hippo_alerts_open": (
+        "Unacknowledged alerts by kind. Schema drift and sync failure are silent "
+        "by construction; this is what makes them countable.",
+        "SELECT kind, count(*) FROM alerts WHERE acknowledged_at IS NULL GROUP BY kind",
+        ("kind",),
+    ),
+    "hippo_alerts_oldest_seconds": (
+        "Age of the oldest unacknowledged alert. Rising means nobody is looking.",
+        "SELECT extract(epoch FROM now() - min(first_seen_at)) FROM alerts "
+        "WHERE acknowledged_at IS NULL",
+        (),
+    ),
     "hippo_queries_total": (
         "Queries answered, by how they were routed. 'error' is the one to watch.",
         "SELECT route, count(*) FROM query_traces GROUP BY route",

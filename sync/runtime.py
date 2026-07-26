@@ -32,6 +32,7 @@ from uuid import UUID
 from prometheus_client import Counter
 from psycopg.types.json import Jsonb
 
+from core.alerts import SCHEMA_DRIFT, SYNC_FAILURE, raise_alert
 from core.db import Connection
 from sync.connectors.sdk import (
     AclRecord,
@@ -119,7 +120,12 @@ def save_cursor(
 
 
 def _warn_on_drift(conn: Connection, connector_id: UUID, stream: str, declared: str) -> None:
-    """Schema drift is a warning and a stored payload, never a dropped record."""
+    """Schema drift is a warning and a stored payload, never a dropped record.
+
+    It also raises an alert (P2-OBS-2). Drift is the failure that degrades
+    quietly: a connector keeps working, extracts slightly less, and answers get
+    slightly worse for weeks. A log line nobody reads is not a notification.
+    """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT schema_version FROM sync_state WHERE connector_id = %s AND stream = %s",
@@ -136,6 +142,16 @@ def _warn_on_drift(conn: Connection, connector_id: UUID, stream: str, declared: 
                 "previous": previous,
                 "current": declared,
             },
+        )
+        raise_alert(
+            conn,
+            SCHEMA_DRIFT,
+            f"schema version moved from {previous} to {declared}",
+            connector_id=connector_id,
+            stream=stream,
+            # One alert per version transition, not one per sync: a drifted
+            # connector syncs every few minutes and the news does not change.
+            fingerprint=f"{previous}->{declared}",
         )
 
 
@@ -304,6 +320,20 @@ def persist_acls(
     return written
 
 
+def _clear_failure(conn: Connection, connector_id: UUID, stream: str) -> None:
+    """A successful run clears the error.
+
+    Without this a stream that failed once would look broken forever, and an
+    operator who learns to ignore a stale red light has lost the alerting.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE sync_state SET last_error = NULL "
+            "WHERE connector_id = %s AND stream = %s AND last_error IS NOT NULL",
+            (connector_id, stream),
+        )
+
+
 def project_acl_grants(conn: Connection, connector_id: UUID) -> int:
     """Materialise acl_grants from source grants. Safe to run at any time."""
     with conn.cursor() as cur:
@@ -329,13 +359,65 @@ class SyncRuntime:
         return self._connector_id
 
     def sync_stream(self, conn: Connection, stream: str) -> StreamOutcome:
+        """Run one stream, and make its failure visible if it has one.
+
+        sync_state.last_error has existed since 001 and nothing ever wrote to
+        it, so a stream failing for a day looked exactly like a stream with
+        nothing to do. For the ACL stream those two states are a stale
+        permission and a current one.
+
+        The error is recorded and then re-raised: the jobs runtime owns retry
+        and the dead letter, and swallowing it here would turn a failed sync
+        into a successful one.
+        """
         if stream not in READ_STREAMS:
             msg = f"unknown stream {stream!r}; expected one of {READ_STREAMS}"
             raise ValueError(msg)
         _warn_on_drift(conn, self._connector_id, stream, self._connector.schema_version)
-        if stream == "acls":
-            return self._sync_acls(conn)
-        return self._sync_paged(conn, stream)
+        try:
+            outcome = self._sync_acls(conn) if stream == "acls" else self._sync_paged(conn, stream)
+        except Exception as exc:
+            self._record_failure(conn, stream, exc)
+            raise
+        if outcome.complete:
+            # Only a clean run clears the error. A rate-limited pass made
+            # progress and recorded why it stopped, and wiping that would erase
+            # the one explanation for why the stream is behind.
+            _clear_failure(conn, self._connector_id, stream)
+        return outcome
+
+    def _record_failure(self, conn: Connection, stream: str, exc: Exception) -> None:
+        """Write the error where something other than a log will find it.
+
+        Its own transaction, because the failing sync's transaction is about to
+        roll back and would take this with it.
+        """
+        message = f"{type(exc).__name__}: {exc}"[:500]
+        try:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO sync_state (connector_id, stream, last_error) "
+                        "VALUES (%s, %s, %s) "
+                        "ON CONFLICT (connector_id, stream) DO UPDATE SET last_error = %s",
+                        (self._connector_id, stream, message, message),
+                    )
+                raise_alert(
+                    conn,
+                    SYNC_FAILURE,
+                    message,
+                    connector_id=self._connector_id,
+                    stream=stream,
+                    # Keyed on the exception type rather than the whole message,
+                    # so a rate limit that reports a different retry-after each
+                    # time is still one alert.
+                    fingerprint=type(exc).__name__,
+                )
+        except Exception as recording_failure:
+            LOG.error(
+                "could not record a sync failure",
+                extra={"stream": stream, "error": str(recording_failure)},
+            )
 
     def sync_all(self, conn: Connection) -> dict[str, StreamOutcome]:
         """Identities first: content and ACLs both reference principals."""

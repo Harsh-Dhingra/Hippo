@@ -53,6 +53,17 @@ class Settings(BaseSettings):
         description="TOML file classifying action types as routine or consequential. "
         "Absent means the safest policy there is: everything waits for a human.",
     )
+    alert_webhook_url: SecretStr = Field(
+        default=SecretStr(""),
+        description="Where to POST drift and sync-failure alerts. A SecretStr because a "
+        "Slack incoming-webhook URL is a credential: anyone holding it can post as the "
+        "integration. Empty disables delivery; the alerts are still recorded and shown.",
+    )
+    alert_interval_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="How often the API delivers open alerts to the webhook.",
+    )
     auto_approve_interval_seconds: float = Field(
         default=30.0,
         gt=0,

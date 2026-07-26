@@ -58,6 +58,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "users": NONE,
         "sessions": NONE,
         "action_events": NONE,
+        "alerts": NONE,
     },
     "hippo_resolver": {
         "raw_records": READ,
@@ -81,6 +82,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "users": NONE,
         "sessions": NONE,
         "action_events": NONE,
+        "alerts": NONE,
     },
     "hippo_agent": {
         "actions": frozenset({"INSERT"}),
@@ -107,6 +109,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "users": NONE,
         "sessions": NONE,
         "action_events": NONE,
+        "alerts": NONE,
     },
     # Serves people: logins, approvals, and enough to render one. It reads no
     # content — a query runs under SET LOCAL ROLE hippo_agent, so a prompt
@@ -147,6 +150,9 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         # INSERT, UPDATE or DELETE, because a log the application can rewrite
         # answers "what do we currently claim happened".
         "action_events": NONE,
+        # Read to show them, and a column grant for notified_at so delivery can
+        # be recorded. Raising one goes through a granted function.
+        "alerts": READ,
     },
 }
 
@@ -402,13 +408,14 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
     ("role", "expected"),
     [
         ("hippo_agent", ["my_trace", "my_traces", "timeline", "visible_chunks"]),
-        ("hippo_sync", ["project_acl_grants"]),
+        ("hippo_sync", ["project_acl_grants", "raise_alert"]),
         ("hippo_resolver", []),
         # The API serves the trace view and the approval buttons. It never
         # calls visible_chunks(): a query runs as hippo_agent instead.
         (
             "hippo_api",
             [
+                "acknowledge_alert",
                 "ensure_personal_scope",
                 "my_action_events",
                 "my_notes",
@@ -416,7 +423,9 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
                 "my_scopes",
                 "my_trace",
                 "my_traces",
+                "open_alerts",
                 "project_note",
+                "raise_alert",
                 "timeline",
                 "unproject_note",
             ],
@@ -558,4 +567,7 @@ def test_no_role_holds_an_unexpected_column_grant(migrated: Connection) -> None:
         )
         column_only = [(str(r[0]), str(r[1]), str(r[2])) for r in cur.fetchall()]
 
-    assert column_only == [("hippo_sync", "actions", "UPDATE")], column_only
+    assert column_only == [
+        ("hippo_api", "alerts", "UPDATE"),
+        ("hippo_sync", "actions", "UPDATE"),
+    ], column_only

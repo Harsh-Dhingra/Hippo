@@ -25,6 +25,7 @@ from agent.policy import load_policy
 from agent.providers import build_provider
 from api.approvals import auto_approve_pending
 from api.routes import build_router
+from core.alerts import notify
 from core.config import Settings, get_settings
 from core.db import Connection, Database, connect
 from core.logging import configure_logging
@@ -125,6 +126,31 @@ async def _sweep(db: Database, settings: Settings) -> None:
             LOG.error("auto-approval sweep failed", extra={"error": str(exc)})
 
 
+async def _deliver_alerts(db: Database, settings: Settings) -> None:
+    """Push open alerts to the configured webhook.
+
+    Silent when no webhook is configured, which is the default: alerts are
+    still recorded and shown in the UI, and delivery is the opt-in part. The
+    loop survives its own failures for the same reason the sweep does — a
+    notifier that died on one bad tick would stop notifying without anyone
+    noticing, which is the exact failure it exists to prevent.
+    """
+    webhook = settings.alert_webhook_url.get_secret_value()
+    if not webhook:
+        return
+
+    LOG.info("alert webhook configured")
+    while True:
+        await asyncio.sleep(settings.alert_interval_seconds)
+        try:
+            with db.connection(timeout=5.0) as conn:
+                sent = notify(conn, webhook)
+            if sent:
+                LOG.info("alerts delivered", extra={"count": sent})
+        except Exception as exc:
+            LOG.error("alert delivery failed", extra={"error": str(exc)})
+
+
 class _LazyDatabase:
     """Defers to app.state.db, which the lifespan sets.
 
@@ -172,12 +198,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # process represents people and holds no source-system credential, so
         # what decides still cannot be what acts.
         sweeper = asyncio.create_task(_sweep(db, resolved))
+        alerter = asyncio.create_task(_deliver_alerts(db, resolved))
         try:
             yield
         finally:
-            sweeper.cancel()
-            with suppress(asyncio.CancelledError):
-                await sweeper
+            for task in (sweeper, alerter):
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
             REGISTRY.unregister(collector)
             db.close()
 

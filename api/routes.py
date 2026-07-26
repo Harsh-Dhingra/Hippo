@@ -41,6 +41,7 @@ from agent.loop import Agent
 from agent.timeline import build as build_timeline
 from agent.trace import list_traces, load_trace
 from api import approvals, auth, notes
+from core.alerts import acknowledge, open_alerts
 from core.audit import AuditEvent, events_for, to_csv, to_jsonl
 from core.db import Connection
 from resolver.embeddings import EmbeddingProvider
@@ -128,6 +129,21 @@ class QueryResponse(BaseModel):
     model: str
     input_tokens: int
     output_tokens: int
+
+
+class AlertResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    kind: str
+    connector: str | None
+    stream: str | None
+    detail: str
+    headline: str
+    occurrences: int
+    is_recurring: bool
+    first_seen_at: datetime
+    last_seen_at: datetime
 
 
 class AuditEventResponse(BaseModel):
@@ -532,6 +548,37 @@ def build_router(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such note") from exc
         except notes.NotYoursError as exc:
             raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+    # -- alerts ---------------------------------------------------------------
+
+    @router.get(
+        "/alerts",
+        tags=["ops"],
+        summary="What is quietly broken",
+        description=(
+            "Schema drift and sync failures. Both degrade silently: a drifted "
+            "connector keeps working and extracts less, and a failing stream "
+            "looks exactly like a stream with nothing to do. Deduplicated, so "
+            "a stream failing every four minutes is one row with a counter."
+        ),
+    )
+    def get_alerts(conn: Conn, principal_id: Principal, limit: int = 100) -> list[AlertResponse]:
+        # Not scoped to the reader, deliberately: an alert is about the
+        # deployment rather than about anyone's content, and hiding a broken
+        # sync from whoever happens to be looking would be the wrong default.
+        return [AlertResponse.model_validate(alert) for alert in open_alerts(conn, limit)]
+
+    @router.post(
+        "/alerts/{alert_id}/acknowledge",
+        tags=["ops"],
+        summary="Say you have seen it",
+        description=(
+            "Not a delete. That somebody looked is worth keeping, and the same "
+            "problem recurring afterwards is news rather than noise."
+        ),
+    )
+    def acknowledge_alert(conn: Conn, principal_id: Principal, alert_id: UUID) -> dict[str, bool]:
+        return {"acknowledged": acknowledge(conn, alert_id, principal_id)}
 
     # -- audit ---------------------------------------------------------------
 
