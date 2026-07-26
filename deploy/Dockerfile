@@ -18,11 +18,19 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY README.md LICENSE ./
+# Every first-party package api.main imports, transitively. A missing one is
+# an ImportError at container start rather than a degraded feature, and
+# tests/test_packaging.py compares this list against the real import graph so
+# adding a package cannot silently forget this file.
 COPY core ./core
 COPY api ./api
 COPY sync ./sync
 COPY resolver ./resolver
 COPY agent ./agent
+COPY surfaces ./surfaces
+
+# Worked examples, so HIPPO_SKILLS_PATH=/app/skills works out of the box.
+COPY skills ./skills
 
 # The demo world. A few kilobytes of JSON so `docker compose up` can be tried
 # before anyone connects a Slack workspace; see deploy/demo/__init__.py.

@@ -71,7 +71,10 @@ strict = true
 warn_unreachable = true
 disallow_any_unimported = true
 show_error_codes = true
-files = ["core", "api", "sync", "resolver", "agent", "tests"]
+# Every first-party package, so `mypy` with no arguments checks what `mypy .`
+# would. A package left off this list is one CI never type-checks — which is
+# how surfaces/ went unchecked by the gate while passing locally.
+files = ["core", "api", "sync", "resolver", "agent", "surfaces", "evals", "deploy", "tests"]
 
 [tool.ruff]
 line-length = 100
@@ -93,6 +96,9 @@ addopts = [
     "--cov=resolver",
     "--cov=agent",
     "--cov=evals",
+    # Same reason as the mypy list: a package outside this one is a package the
+    # coverage floor cannot see, so it could be entirely untested and green.
+    "--cov=surfaces",
     "--cov-report=term-missing",
     # Ratchet only upwards (CLAUDE.md, Quality gates).
     "--cov-fail-under=98",
