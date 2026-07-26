@@ -161,9 +161,9 @@ def _create_entity(
     attrs["resolved_by"] = rule
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO entities (entity_type, canonical_key, title, attrs) "
-            "VALUES (%s, %s, %s, %s) RETURNING id",
-            (candidate.entity_type, key, candidate.title, Jsonb(attrs)),
+            "INSERT INTO entities (entity_type, canonical_key, title, attrs, occurred_at) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (candidate.entity_type, key, candidate.title, Jsonb(attrs), candidate.occurred_at),
         )
         row = cur.fetchone()
     assert row is not None
@@ -178,14 +178,24 @@ def _absorb(conn: Connection, entity_id: UUID, candidate: EntityCandidate, rule:
     answer instead of the graph flickering between two spellings of one name.
     Attributes merge, because a second system usually knows something the first
     did not.
+
+    occurred_at takes the earliest of the two. When one person appears in Slack
+    and in Jira, the merged entity's moment is the first time either system saw
+    them — a later sighting is not news about when something happened.
     """
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE entities SET "
             "    attrs = attrs || %s, "
-            "    title = coalesce(title, %s) "
+            "    title = coalesce(title, %s), "
+            "    occurred_at = least(occurred_at, %s) "
             "WHERE id = %s",
-            (Jsonb({**candidate.attrs, "resolved_by": rule}), candidate.title, entity_id),
+            (
+                Jsonb({**candidate.attrs, "resolved_by": rule}),
+                candidate.title,
+                candidate.occurred_at,
+                entity_id,
+            ),
         )
 
 

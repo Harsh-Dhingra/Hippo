@@ -725,6 +725,7 @@ def test_the_openapi_document_covers_every_v1_route(client: TestClient) -> None:
         "/api/v1/notes/{note_id}/pin",
         "/api/v1/notes/{note_id}/supersede",
         "/api/v1/scopes",
+        "/api/v1/timeline/{entity_id}",
         "/api/v1/traces",
         "/api/v1/traces/{trace_id}",
         "/healthz",
@@ -959,3 +960,50 @@ def test_an_empty_note_is_refused_by_the_schema(client: TestClient, world: Conne
     )
 
     assert response.status_code == 422
+
+
+def test_the_timeline_endpoint_orders_by_when_things_happened(
+    client: TestClient, world: Connection
+) -> None:
+    """P2-MEM-3 over HTTP: pick a ticket, get a coherent cited chain."""
+    with world.cursor() as cur:
+        cur.execute("SELECT id FROM entities WHERE title = 'Acme renewal blocked on legal review'")
+        ticket = (cur.fetchone() or (None,))[0]
+
+    response = client.get(f"/api/v1/timeline/{ticket}?hops=3", headers=headers(client, ALICE_EMAIL))
+
+    assert response.status_code == 200
+    body = response.json()
+    events = [m for m in body["moments"] if not m["is_context"]]
+    times = [m["occurred_at"] for m in events]
+    assert times == sorted(times)
+    assert body["starts_at"] < body["ends_at"]
+    assert any(m["url"] for m in events)
+
+
+def test_a_timeline_is_filtered_to_the_viewer(client: TestClient, world: Connection) -> None:
+    with world.cursor() as cur:
+        cur.execute("SELECT id FROM entities WHERE title = 'Acme renewal blocked on legal review'")
+        ticket = (cur.fetchone() or (None,))[0]
+
+    alice = client.get(f"/api/v1/timeline/{ticket}?hops=3", headers=headers(client, ALICE_EMAIL))
+    carol = client.get(f"/api/v1/timeline/{ticket}?hops=3", headers=headers(client, CAROL_EMAIL))
+
+    titles = " ".join(m["title"] or "" for m in carol.json()["moments"])
+    assert PRIVATE_TEXT not in titles
+    assert len(carol.json()["moments"]) < len(alice.json()["moments"])
+
+
+def test_a_timeline_for_something_invisible_is_empty(client: TestClient, world: Connection) -> None:
+    """Not a 404 and not a partial chain: naming an entity you lack access to
+    must not confirm that it exists."""
+    with world.cursor() as cur:
+        cur.execute("SELECT id FROM entities WHERE title = '#deals-acme'")
+        private_channel = (cur.fetchone() or (None,))[0]
+
+    response = client.get(
+        f"/api/v1/timeline/{private_channel}", headers=headers(client, CAROL_EMAIL)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["moments"] == []

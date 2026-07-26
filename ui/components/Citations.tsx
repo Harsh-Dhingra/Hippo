@@ -34,6 +34,13 @@ export function Citations({ citations }: { citations: Citation[] }) {
               </span>
             )}
             <span className="text-[var(--color-muted)]">{citation.entity_type}</span>
+            <a
+              href={`/timeline/${citation.entity_id}`}
+              className="text-[var(--color-muted)] underline underline-offset-2"
+              title="What else happened around this"
+            >
+              timeline
+            </a>
           </li>
         ))}
       </ol>

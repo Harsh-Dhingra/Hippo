@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -84,6 +85,12 @@ class EntityCandidate(BaseModel):
         description="What identity resolution may merge on. Only set where the "
         "source states something genuinely identifying, such as an email.",
     )
+    occurred_at: datetime | None = Field(
+        default=None,
+        description="When the source says this happened, not when we synced it. "
+        "None when the source states no time; guessing from the sync clock would "
+        "invent history rather than report it.",
+    )
     attrs: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -112,6 +119,34 @@ class Extraction(BaseModel):
 
 
 Extractor = Callable[[RawRecord], Extraction]
+
+
+def slack_time(value: Any) -> datetime | None:
+    """A Slack ts: epoch seconds with a fractional counter after the dot.
+
+    The fraction is a per-channel sequence number rather than sub-second
+    precision, so it is dropped. Anything that is not a number is not a time,
+    and returns None rather than a guess.
+    """
+    text = str(value or "")
+    whole = text.split(".", 1)[0]
+    if not whole.isdigit():
+        return None
+    return datetime.fromtimestamp(int(whole), tz=UTC)
+
+
+def jira_time(value: Any) -> datetime | None:
+    """Jira sends ISO 8601 with a +0000 style offset Python needs a colon in."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) > 5 and (text[-5] in "+-") and text[-5:].isdigit() is False:
+        text = text[:-5] + text[-5:-2] + ":" + text[-2:]
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        LOG.warning("unparseable jira timestamp", extra={"value": str(value)[:40]})
+        return None
 
 
 def _clip(text: str | None, limit: int = 200) -> str | None:
@@ -160,6 +195,7 @@ def extract_slack_message(record: RawRecord) -> Extraction:
             source=record.ref,
             entity_type="message",
             title=_clip(text),
+            occurred_at=slack_time(payload.get("ts")),
             attrs={"ts": payload.get("ts"), "thread_ts": payload.get("thread_ts")},
         ),
     )
@@ -247,6 +283,7 @@ def extract_jira_issue(record: RawRecord) -> Extraction:
             source=record.ref,
             entity_type="ticket",
             title=_clip(fields.get("summary")) or record.source_id,
+            occurred_at=jira_time(fields.get("created")),
             attrs={
                 "key": record.source_id,
                 "status": (fields.get("status") or {}).get("name"),
@@ -288,6 +325,7 @@ def extract_jira_comment(record: RawRecord) -> Extraction:
             # are titled here; rendering ADF is enrichment's problem, and the
             # payload is stored verbatim either way.
             title=_clip(body) if isinstance(body, str) else None,
+            occurred_at=jira_time(payload.get("created")),
             attrs={"id": payload.get("id")},
         ),
     )

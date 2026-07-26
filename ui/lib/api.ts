@@ -171,6 +171,27 @@ export type Note = {
   updated_at: string;
 };
 
+export type Moment = {
+  entity_id: string;
+  entity_type: string;
+  title: string | null;
+  /** When the source says it happened, not when it was synced. */
+  occurred_at: string | null;
+  hops: number;
+  via: string | null;
+  relation: string;
+  url: string | null;
+  /** Undated: context for the chain rather than a step in it. */
+  is_context: boolean;
+};
+
+export type Timeline = {
+  subject: string;
+  moments: Moment[];
+  starts_at: string | null;
+  ends_at: string | null;
+};
+
 export type TraceSummary = {
   id: string;
   question: string;

@@ -35,7 +35,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent.links import ConnectorDirectory, load_directory
 from agent.loop import Agent
+from agent.timeline import build as build_timeline
 from agent.trace import list_traces, load_trace
 from api import approvals, auth, notes
 from core.db import Connection
@@ -126,6 +128,27 @@ class QueryResponse(BaseModel):
     output_tokens: int
 
 
+class MomentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    entity_id: UUID
+    entity_type: str
+    title: str | None
+    occurred_at: datetime | None
+    hops: int
+    via: str | None
+    relation: str
+    url: str | None
+    is_context: bool
+
+
+class TimelineResponse(BaseModel):
+    subject: UUID
+    moments: list[MomentResponse]
+    starts_at: datetime | None
+    ends_at: datetime | None
+
+
 class NoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -197,6 +220,14 @@ def build_router(
     app must not require one.
     """
     router = APIRouter(prefix="/api/v1")
+    cached_directory: dict[str, ConnectorDirectory] = {}
+
+    def _directory(conn: Connection) -> ConnectorDirectory:
+        """Loaded once. It changes when an operator adds a connector, not per
+        request, and it carries no content — only how to build a link."""
+        if "directory" not in cached_directory:
+            cached_directory["directory"] = load_directory(conn)
+        return cached_directory["directory"]
 
     def connection() -> Iterator[Connection]:
         with db.connection() as conn:
@@ -482,6 +513,36 @@ def build_router(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such note") from exc
         except notes.NotYoursError as exc:
             raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+    # -- timeline ------------------------------------------------------------
+
+    @router.get(
+        "/timeline/{entity_id}",
+        tags=["memory"],
+        summary="What happened around one thing, in order",
+        description=(
+            "Walks the graph out from an entity and orders what it reaches by "
+            "when the source says it happened — not by when it was synced. "
+            "Filtered by the same ACL closure retrieval uses, so an entry "
+            "appears here exactly when it could appear in an answer. Entities "
+            "the source gave no time for are returned as context rather than "
+            "as events."
+        ),
+    )
+    def get_timeline(
+        conn: Conn, principal_id: Principal, entity_id: UUID, hops: int = 2, limit: int = 100
+    ) -> TimelineResponse:
+        directory = _directory(conn)
+        chain = build_timeline(
+            conn, principal_id, entity_id, hops=hops, limit=limit, directory=directory
+        )
+        span = chain.span
+        return TimelineResponse(
+            subject=chain.subject,
+            moments=[MomentResponse.model_validate(moment) for moment in chain.moments],
+            starts_at=span[0] if span else None,
+            ends_at=span[1] if span else None,
+        )
 
     # -- traces ------------------------------------------------------------
 

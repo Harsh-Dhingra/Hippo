@@ -391,7 +391,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
 @pytest.mark.parametrize(
     ("role", "expected"),
     [
-        ("hippo_agent", ["my_trace", "my_traces", "visible_chunks"]),
+        ("hippo_agent", ["my_trace", "my_traces", "timeline", "visible_chunks"]),
         ("hippo_sync", ["project_acl_grants"]),
         ("hippo_resolver", []),
         # The API serves the trace view and the approval buttons. It never
@@ -406,6 +406,7 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
                 "my_trace",
                 "my_traces",
                 "project_note",
+                "timeline",
                 "unproject_note",
             ],
         ),
