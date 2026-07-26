@@ -244,6 +244,40 @@ primitive, because the link and the domain are both genuinely ours.
 
 *Tested by:* `test_oidc.py`, against an in-process IdP with a real signing key.
 
+### 4.10 A coding agent as a client (A1, A2, A5)
+
+The MCP surface (P3-SRF-2) is a client, not a second implementation: it holds no
+database credential, cannot reach Postgres, and makes authenticated HTTP
+requests as exactly one person. A surface cannot widen the permission model
+because it has nothing to widen it with.
+
+Three things it does not expose, and the omissions are the mitigation:
+
+* **No approve, decline or rollback.** The write path is propose → a person
+  reads → a person approves → the sync worker executes. A tool that could
+  approve would let the model that wrote a proposal accept it, and the
+  separation the product rests on would be a code path rather than a guarantee.
+* **No execute.** That belongs to the only component holding source-system
+  credentials, and a tool here would put them one call from a model.
+* **No shared token.** The server refuses to start without one and has no
+  default. A shared token collapses every developer's queries onto one
+  principal and keeps answering fluently, which is the silent failure this
+  whole project exists to prevent.
+
+Retrieved passages leave fenced and labelled as data, in the same shape and for
+the same reason as §4.2 — a coding agent treats tool output as trustworthy
+because it asked for it, and the content is Slack messages anybody in the
+company could have written.
+
+**Stated rather than mitigated:** using this surface sends retrieved passages to
+whichever model the coding agent runs on, which may be outside the
+organisation's boundary. That is a real change to the trust story and belongs in
+a deployment decision, not in a footnote. The Slack surface keeps everything
+inside; Hippo's own provider is pluggable to a local endpoint.
+
+*Tested by:* `test_mcp_surface.py`, including two developers over one corpus
+where neither session reaches the other's content.
+
 ---
 
 ## 5. What we deliberately do not defend against

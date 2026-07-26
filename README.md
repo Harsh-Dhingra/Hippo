@@ -196,6 +196,9 @@ their own inference endpoint has not really self-hosted anything.
 - [docs/PROJECT.md](docs/PROJECT.md) — the roadmap as a fragment tree
 - [docs/BENCHMARK.md](docs/BENCHMARK.md) — what we measured, including the bad
   numbers
+- [docs/CONNECTORS.md](docs/CONNECTORS.md) — writing one, and the two mistakes
+  that fail silently
+- [docs/MCP.md](docs/MCP.md) — Hippo in a coding agent
 - [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) — each attack, and what
   structurally prevents it
 - [CLAUDE.md](CLAUDE.md) — the rules this codebase is written under
@@ -203,6 +206,23 @@ their own inference endpoint has not really self-hosted anything.
 Start with [core/migrations/003_visible_chunks.sql](core/migrations/003_visible_chunks.sql).
 It is the load-bearing code of the whole project, and everything else can be
 rewritten.
+
+---
+
+## In your coding agent
+
+Hippo speaks MCP, so Claude Code, Codex and anything else on the protocol can
+ask your company's memory why the code is the way it is:
+
+```json
+{ "mcpServers": { "hippo": { "command": "hippo-mcp",
+  "env": { "HIPPO_URL": "https://hippo.internal", "HIPPO_TOKEN": "your-token" } } } }
+```
+
+One token per person, because the token is how Hippo knows whose permissions to
+answer with. It can search, ask, and propose — and it deliberately cannot
+approve, because the model that writes a proposal must not be the thing that
+accepts it. [docs/MCP.md](docs/MCP.md).
 
 ---
 

@@ -18,6 +18,7 @@ dependencies = [
     "pyjwt[crypto]>=2.10",
     "pyyaml>=6.0.3",
     "types-pyyaml>=6.0.12.20260724",
+    "mcp>=1.28.1",
 ]
 
 [project.scripts]
@@ -27,6 +28,9 @@ hippo-migrate = "core.migrate:main"
 hippo-conformance = "sync.connectors.conformance:main"
 # Generates a connector package that passes conformance as generated (P3-SDK-2).
 hippo-new-connector = "sync.connectors.scaffold:main"
+# Hippo as an MCP server, for Claude Code, Codex and anything else that speaks
+# the protocol (P3-SRF-2).
+hippo-mcp = "surfaces.mcp.server:main"
 
 # The connectors that ship with Hippo, registered through the same entry-point
 # group a third-party package uses. Deliberately not a private import path: if

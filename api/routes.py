@@ -37,8 +37,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent.links import ConnectorDirectory, load_directory
+from agent.links import ConnectorDirectory, deep_link, load_directory
 from agent.loop import Agent, Answer
+from agent.retrieval import plan_query, retrieve
 from agent.scheduled import ScheduleError
 from agent.scheduled import create as create_schedule
 from agent.scheduled import delete as delete_schedule
@@ -130,6 +131,35 @@ class SSOCallbackRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     k: int = Field(default=12, ge=1, le=100)
+
+
+class RetrieveRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    k: int = Field(default=12, ge=1, le=100)
+    hops: int = Field(default=1, ge=0, le=2)
+
+
+class HitResponse(BaseModel):
+    """One retrieved chunk, as the filter returned it.
+
+    `content` is quoted material from a source system. It is untrusted — see
+    THREAT-MODEL section 4.2 — and any caller putting it in front of a model
+    has to delimit it as data rather than as instructions.
+    """
+
+    chunk_id: UUID
+    entity_id: UUID
+    entity_type: str
+    title: str | None
+    content: str
+    score: float
+    retrieval_modes: list[str]
+    url: str | None
+
+
+class RetrieveResponse(BaseModel):
+    hits: list[HitResponse]
+    rationale: str
 
 
 class SkillInputResponse(BaseModel):
@@ -673,6 +703,50 @@ def build_router(
         with as_agent(conn):
             answer = built.answer(conn, principal_id, body.question, k=body.k)
         return _query_response(answer)
+
+    @router.post(
+        "/retrieve",
+        tags=["agent"],
+        summary="Retrieve without answering",
+        description=(
+            "The same permission filter as /queries with no model call: what "
+            "the asking person can see for this question, and nothing else. "
+            "For callers that will do their own reasoning over the results. "
+            "The content is quoted material from a source system and is "
+            "untrusted; delimit it as data before showing it to a model."
+        ),
+    )
+    def retrieve_only(
+        conn: Conn, principal_id: Principal, body: RetrieveRequest
+    ) -> RetrieveResponse:
+        """Strictly less than /queries: it retrieves and stops.
+
+        Worth having as its own route because a caller with its own model —
+        a coding agent, a notebook — otherwise has to run Hippo's model to get
+        at chunks it was going to reason over itself. Two models in the loop
+        costs latency, money and a second place the content has been.
+        """
+        directory = _directory(conn)
+        plan = plan_query(body.question, k=body.k)
+        plan = plan.model_copy(update={"hops": body.hops})
+        with as_agent(conn):
+            hits = retrieve(conn, principal_id, plan, embedder)
+        return RetrieveResponse(
+            rationale=plan.rationale,
+            hits=[
+                HitResponse(
+                    chunk_id=hit.chunk_id,
+                    entity_id=hit.entity_id,
+                    entity_type=hit.entity_type,
+                    title=hit.entity_title,
+                    content=hit.content,
+                    score=hit.score,
+                    retrieval_modes=list(hit.retrieval_modes),
+                    url=deep_link(directory.get(hit.connector_id), hit.source_type, hit.source_id),
+                )
+                for hit in hits
+            ],
+        )
 
     # -- actions -----------------------------------------------------------
 

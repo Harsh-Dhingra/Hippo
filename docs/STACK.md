@@ -24,6 +24,8 @@
 | Deploy v0 | **docker compose: app + postgres. Two containers.** | K8s-first, Helm-first | Real multi-node adopters exist → charts at P4-ENT-2, compose stays forever as the front door |
 | Auth | **Session auth v0 → OIDC at P2-GOV-3 → SCIM at P4-ENT-1** | Building auth cleverness early | Per plan |
 | Token verification | **PyJWT + cryptography** (P2-GOV-3) | Authlib, hand-rolled RSA verification | Never hand-rolled; a second library only if PyJWT stops being maintained |
+| Agent-tool surface | **One MCP server** (P3-SRF-2) | A native plugin per coding agent | Never — n plugins is n codebases re-implementing auth and drifting apart |
+| Skill definitions | **YAML via `yaml.safe_load`** (P3-AGT-1) | TOML, a DSL, a database table | A skill needs control flow, which would mean it has stopped being configuration |
 | Observability | **Prometheus endpoints + structured JSON logs from commit one; Grafana dashboard shipped in /deploy** | OTel full-trace mesh day one | OTel when a real adopter asks |
 | CI quality gate | **mypy --strict, ruff, pytest w/ coverage floor, compose smoke test, role-grant leak test — all blocking, from commit one** | "We'll add tests later" | Never |
 

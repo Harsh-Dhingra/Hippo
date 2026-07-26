@@ -79,6 +79,7 @@ Companion docs: ARCHITECTURE.md (system design, decision log), schema_v0.sql (da
 - **P3-AGT-1 · Skills primitive.** Named, shareable, versioned prompt+retrieval+action bundles (the useful kernel of "Agent Studio" without the no-code builder). Definable in YAML, in-repo shareable.
 - **P3-AGT-2 · Scheduled skills.** Cron-triggered skills (Monday pipeline summary, standing digests) via the jobs runtime.
 - **P3-SRF-1 · Slack surface.** Ask/answer/approve from Slack itself. Meets users where they are; also the best demo distribution channel.
+- **P3-SRF-2 · MCP server.** Hippo as an MCP server, so Claude Code, Codex and anything else speaking the protocol can ask a company's memory *why the code is like this* — filtered to the developer asking. One adapter rather than a native plugin per agent: three plugins would be three codebases re-implementing auth and drifting. Deliberately exposes read and propose and **not** approve — a surface where the model that writes a proposal can accept it makes rule 2 decorative. Done: two developers, one corpus, and neither MCP session reaches the other's content. *Developers are who install things, so this is the adoption wedge; SRF-1 is the value surface.*
 - **P3-COM-1 · Governance docs.** CONTRIBUTING, connector review bar, maintainer ladder, roadmap process. *Boring docs that decide whether strangers invest.*
 
 **Phase 3 exit:** ≥ 2 community-authored connectors merged; ≥ 5 connectors total; skills shared between real users.
