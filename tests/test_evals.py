@@ -40,6 +40,13 @@ pytestmark = [pytest.mark.requires_db, pytest.mark.eval]
 # filter breaks score ties by chunk id, and random ids moved the result by
 # several points between runs.
 FLOOR_RECALL_AT_20 = 0.70
+# The default k, and the number that moved when P3-GRF-1 made the walk typed
+# and directional: recall 0.655 -> 0.747 and traversal 0.417 -> 0.792, measured
+# controlled on identical rows. Floored here so the win cannot quietly regress
+# — a k=20-only floor would have let it, because at k=20 the old walk
+# eventually caught up. That was the defect: it needed a budget nobody uses.
+FLOOR_RECALL_AT_12 = 0.70
+FLOOR_TRAVERSAL_AT_12 = 0.70
 FLOOR_MRR = 0.35
 FLOOR_LEXICAL = 0.95
 FLOOR_TRAVERSAL = 0.65
@@ -162,6 +169,26 @@ def test_traversal_reaches_what_only_an_edge_connects(
     report = run(conn, cases_from(corpus), k=20)
 
     assert report.recall_for("traversal") >= FLOOR_TRAVERSAL, report.summary()
+
+
+def test_the_graph_earns_its_place_at_the_default_k(
+    seeded: tuple[Connection, Corpus],
+) -> None:
+    """The floor that matters more than the k=20 one.
+
+    Before P3-GRF-1 the walk was undirected and untyped, and a one-hop
+    neighbour scored below the tenth direct hit — so at any budget somebody
+    actually uses, the graph half of hybrid retrieval contributed nothing. It
+    caught up by k=20, which is why a k=20-only floor let the defect sit there
+    for three phases.
+    """
+    conn, corpus = seeded
+
+    report = run(conn, cases_from(corpus), k=12)
+
+    assert report.recall_at_k >= FLOOR_RECALL_AT_12, report.summary()
+    assert report.recall_for("traversal") >= FLOOR_TRAVERSAL_AT_12, report.summary()
+    assert "graph" in report.recall_by_mode(), report.summary()
 
 
 def test_semantic_retrieval_is_measured_even_though_it_is_weak(

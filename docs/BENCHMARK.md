@@ -24,18 +24,23 @@ two runs differ only if the system did.
 ```
 k=3   recall=0.483 mrr=0.359   lexical=1.00 semantic=0.12 traversal=0.00  leaks=0
 k=5   recall=0.506 mrr=0.365   lexical=1.00 semantic=0.21 traversal=0.00  leaks=0
-k=10  recall=0.540 mrr=0.371   lexical=1.00 semantic=0.33 traversal=0.00  leaks=0
-k=20  recall=0.747 mrr=0.392   lexical=1.00 semantic=0.33 traversal=0.75  leaks=0
+k=10  recall=0.747 mrr=0.398   lexical=1.00 semantic=0.25 traversal=0.83  leaks=0
+k=20  recall=0.747 mrr=0.400   lexical=1.00 semantic=0.33 traversal=0.75  leaks=0
 ```
+
+The default k is 12, and it now reads the same as k=20. Before P3-GRF-1 it read
+0.655.
 
 ---
 
 ## The losses
 
-### Semantic recall is 0.33 and that is bad
+### Semantic recall is 0.33, and it is now the largest loss
 
 A third. Two thirds of the questions phrased in different words from the
-content they are about do not retrieve it in the top twenty.
+content they are about do not retrieve it in the top twenty. Seventeen of the
+twenty-two cases that miss anything at all are semantic ones — with traversal
+fixed, this is where nearly all the remaining loss lives.
 
 The reason is not subtle: the default embedder is `HashingEmbeddings`, which is
 lexical. It hashes tokens into a vector. It has no idea that "brought to a
@@ -53,27 +58,49 @@ number says so.
 OpenAI. That measurement was taken on a laptop; the recall numbers transfer, the
 latency numbers do not, and STACK.md says so.
 
-### Graph traversal contributes nothing below k=20
+### Graph traversal contributed nothing below k=20 — fixed, measured
 
-`graph=0.000` at k=3, 5 and 10, then 0.250 at k=20. Traversal recall goes
-0.00 → 0.75 in the same step.
+It used to read `graph=0.000` at k=3, 5 and 10, and 0.250 only at k=20: a
+one-hop neighbour scored `1/(60 + seed_rank + 10*hops)`, which put it below the
+tenth direct hit. At any budget anybody actually uses, the graph half of hybrid
+retrieval was decoration.
 
-Neighbours found by walking the graph are ranked below direct hits by
-construction, so at small k they are all crowded out. That is arguably correct —
-a direct match should beat a neighbour — but it means the graph half of "hybrid
-retrieval" earns its place only at generous k, and any deployment using a
-smaller context budget is running a two-way hybrid, not a three-way one.
+P3-GRF-1 made the walk typed and directional. Controlled — identical rows, same
+HNSW graph, only the function body changed:
 
-Migration 014 improved this by carrying a seed's rank through the walk, so a
-neighbour inherits the standing of what it was found from. Before that,
-traversal recall was 0.00 at every k measured. It is better and it is not good.
+| k | recall | | traversal | |
+|---|---|---|---|---|
+| 5 | 0.506 → 0.506 | +0.000 | 0.000 → 0.000 | |
+| 10 | 0.540 → **0.747** | **+0.207** | 0.000 → **0.833** | |
+| 12 | 0.655 → **0.747** | **+0.092** | 0.417 → **0.792** | |
+| 20 | 0.747 → 0.747 | +0.000 | 0.750 → 0.750 | |
 
-### Six traversal cases still miss entirely
+Unchanged at k=20, because that is where the old walk finally caught up — which
+is exactly why a k=20-only floor let the defect sit through three phases. There
+is a k=12 floor now.
+
+Still 0.000 at k=5: a graph hop costs about seven rank places, so with five
+slots the five best direct matches win. That is the intended behaviour rather
+than a remaining bug.
+
+**The surprise worth recording.** Closing container-siblings — a channel to its
+own messages — *raised* traversal recall rather than lowering it. Arbitrary
+siblings from a busy channel were crowding out the conversational path that
+actually held the answer. The explosion was not only a scaling problem; it was
+hurting quality.
+
+### Six traversal cases still miss at k=20
 
 `traversal-8`, `-26`, `-29`, `-35`, `-41`, `-50` — all the same shape: "resolved
-by rolling forward the migration on node N". The fact is one hop from the
-question's subject, and the hop is not made. Named individually because a
-percentage hides which six.
+by rolling forward the migration on node N". The reply edge exists and is
+walked; the answer is reached and then loses its slot to a direct match. Named
+individually because a percentage hides which six.
+
+Five of them miss at k=12 and six at k=20, which is not a typo: a larger budget
+admits more direct hits, and on this corpus one of them displaces a neighbour
+that had made it in. Worth watching rather than fixing blind — it is a single
+case, and tuning the hop cost to catch it would be fitting the constant to the
+corpus.
 
 ### Keyword recall of 1.00 is less impressive than it looks
 
