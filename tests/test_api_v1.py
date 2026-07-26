@@ -720,6 +720,11 @@ def test_the_openapi_document_covers_every_v1_route(client: TestClient) -> None:
         "/api/v1/actions/{action_id}/approve",
         "/api/v1/actions/{action_id}/decline",
         "/api/v1/actions/{action_id}/rollback",
+        "/api/v1/notes",
+        "/api/v1/notes/{note_id}",
+        "/api/v1/notes/{note_id}/pin",
+        "/api/v1/notes/{note_id}/supersede",
+        "/api/v1/scopes",
         "/api/v1/traces",
         "/api/v1/traces/{trace_id}",
         "/healthz",
@@ -827,3 +832,130 @@ def test_and_can_still_be_approved(
 
     assert response.status_code == 200
     assert response.json()["status"] == "approved"
+
+
+# ---------------------------------------------------------------------------
+# Notes (P2-MEM-1), over HTTP.
+# ---------------------------------------------------------------------------
+
+
+def test_writing_a_note_and_reading_it_back(client: TestClient, world: Connection) -> None:
+    auth_headers = headers(client, ALICE_EMAIL)
+
+    created = client.post(
+        "/api/v1/notes", json={"content": "Priya owns the Acme renewal."}, headers=auth_headers
+    )
+
+    assert created.status_code == 201
+    assert created.json()["scope_type"] == "personal"
+    assert created.json()["is_mine"] is True
+    listed = client.get("/api/v1/notes", headers=auth_headers).json()
+    assert [note["content"] for note in listed] == ["Priya owns the Acme renewal."]
+
+
+def test_a_note_changes_what_a_question_retrieves(
+    client: TestClient, world: Connection, model: ScriptedModel
+) -> None:
+    """The point of the feature, end to end: written through the API, retrieved
+    by the agent, in the prompt."""
+    auth_headers = headers(client, ALICE_EMAIL)
+    client.post(
+        "/api/v1/notes",
+        json={"content": "Renewal escalations go to Priya, not to the deal desk."},
+        headers=auth_headers,
+    )
+
+    client.post(
+        "/api/v1/queries",
+        json={"question": "Who handles renewal escalations?", "k": 40},
+        headers=auth_headers,
+    )
+
+    assert "Renewal escalations go to Priya" in model.last_prompt
+
+
+def test_a_personal_note_is_not_in_someone_elses_list(
+    client: TestClient, world: Connection
+) -> None:
+    client.post(
+        "/api/v1/notes",
+        json={"content": "only alice should see this"},
+        headers=headers(client, ALICE_EMAIL),
+    )
+
+    listed = client.get("/api/v1/notes", headers=headers(client, CAROL_EMAIL)).json()
+
+    assert listed == []
+
+
+def test_the_scopes_endpoint_offers_somewhere_to_write(
+    client: TestClient, world: Connection
+) -> None:
+    scopes = client.get("/api/v1/scopes", headers=headers(client, ALICE_EMAIL)).json()
+
+    assert any(scope["scope_type"] == "personal" for scope in scopes)
+    assert any(scope["scope_type"] == "org" for scope in scopes)
+
+
+def test_editing_someone_elses_note_is_forbidden(client: TestClient, world: Connection) -> None:
+    scopes = client.get("/api/v1/scopes", headers=headers(client, ALICE_EMAIL)).json()
+    org = next(scope for scope in scopes if scope["scope_type"] == "org")
+    note = client.post(
+        "/api/v1/notes",
+        json={"content": "alice wrote this", "scope_id": org["id"]},
+        headers=headers(client, ALICE_EMAIL),
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/notes/{note['id']}",
+        json={"content": "carol rewrote it"},
+        headers=headers(client, CAROL_EMAIL),
+    )
+
+    assert response.status_code == 403
+
+
+def test_superseding_then_restoring_over_http(client: TestClient, world: Connection) -> None:
+    auth_headers = headers(client, ALICE_EMAIL)
+    note = client.post("/api/v1/notes", json={"content": "temporary"}, headers=auth_headers).json()
+
+    retired = client.post(f"/api/v1/notes/{note['id']}/supersede", headers=auth_headers)
+    assert retired.json()["superseded_at"] is not None
+
+    restored = client.post(f"/api/v1/notes/{note['id']}/restore", headers=auth_headers)
+    assert restored.json()["superseded_at"] is None
+
+
+def test_pinning_over_http(client: TestClient, world: Connection) -> None:
+    auth_headers = headers(client, ALICE_EMAIL)
+    note = client.post("/api/v1/notes", json={"content": "pin me"}, headers=auth_headers).json()
+
+    pinned = client.post(
+        f"/api/v1/notes/{note['id']}/pin", json={"pinned": True}, headers=auth_headers
+    )
+
+    assert pinned.json()["pinned"] is True
+
+
+def test_erasing_a_note_over_http(client: TestClient, world: Connection) -> None:
+    auth_headers = headers(client, ALICE_EMAIL)
+    note = client.post("/api/v1/notes", json={"content": "gone soon"}, headers=auth_headers).json()
+
+    assert client.delete(f"/api/v1/notes/{note['id']}", headers=auth_headers).status_code == 204
+    assert client.get("/api/v1/notes", headers=auth_headers).json() == []
+
+
+def test_an_unknown_note_is_not_found(client: TestClient, world: Connection) -> None:
+    response = client.post(
+        f"/api/v1/notes/{uuid4()}/supersede", headers=headers(client, ALICE_EMAIL)
+    )
+
+    assert response.status_code == 404
+
+
+def test_an_empty_note_is_refused_by_the_schema(client: TestClient, world: Connection) -> None:
+    response = client.post(
+        "/api/v1/notes", json={"content": ""}, headers=headers(client, ALICE_EMAIL)
+    )
+
+    assert response.status_code == 422

@@ -80,6 +80,11 @@ export const api = {
       body: body === undefined ? undefined : JSON.stringify(body),
       token,
     }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "PATCH",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
@@ -142,6 +147,28 @@ export type Action = {
   rolled_back_by: string | null;
   error: string | null;
   created_at: string;
+};
+
+export type Scope = {
+  id: string;
+  scope_type: string;
+  name: string;
+};
+
+export type Note = {
+  id: string;
+  scope_id: string;
+  scope_type: string;
+  scope_name: string;
+  author: string;
+  /** Reading is decided by scope; editing is decided by this. */
+  is_mine: boolean;
+  about_entity: string | null;
+  content: string;
+  pinned: boolean;
+  superseded_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type TraceSummary = {

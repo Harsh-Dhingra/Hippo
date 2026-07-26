@@ -20,6 +20,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               Ask
             </Link>
             <Link
+              href="/notes"
+              className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              Memory
+            </Link>
+            <Link
               href="/actions"
               className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             >

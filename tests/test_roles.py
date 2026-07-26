@@ -127,7 +127,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "principal_memberships": NONE,
         "sync_state": NONE,
         "memory_scopes": NONE,
-        "memory_notes": NONE,
+        # Notes are the one place a person writes into memory directly, so the
+        # role serving people owns the table. Reading them back as retrievable
+        # memory still goes through visible_chunks like everything else.
+        "memory_notes": WRITE,
         "jobs": NONE,
         "schema_migrations": NONE,
         # Read through my_trace()/my_traces(), never a SELECT — the same shape
@@ -393,7 +396,19 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
         ("hippo_resolver", []),
         # The API serves the trace view and the approval buttons. It never
         # calls visible_chunks(): a query runs as hippo_agent instead.
-        ("hippo_api", ["my_principals", "my_trace", "my_traces"]),
+        (
+            "hippo_api",
+            [
+                "ensure_personal_scope",
+                "my_notes",
+                "my_principals",
+                "my_scopes",
+                "my_trace",
+                "my_traces",
+                "project_note",
+                "unproject_note",
+            ],
+        ),
     ],
 )
 def test_function_surface_is_exactly_what_was_granted(

@@ -37,8 +37,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent.loop import Agent
 from agent.trace import list_traces, load_trace
-from api import approvals, auth
+from api import approvals, auth, notes
 from core.db import Connection
+from resolver.embeddings import EmbeddingProvider
 
 LOG = logging.getLogger("hippo.api.routes")
 
@@ -125,6 +126,46 @@ class QueryResponse(BaseModel):
     output_tokens: int
 
 
+class NoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    scope_id: UUID
+    scope_type: str
+    scope_name: str
+    author: UUID
+    is_mine: bool
+    about_entity: UUID | None
+    content: str
+    pinned: bool
+    superseded_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ScopeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    scope_type: str
+    name: str
+
+
+class NoteRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=notes.MAX_LENGTH)
+    scope_id: UUID | None = None
+    about_entity: UUID | None = None
+    pinned: bool = False
+
+
+class NoteEdit(BaseModel):
+    content: str = Field(min_length=1, max_length=notes.MAX_LENGTH)
+
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+
 class ActionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -144,7 +185,11 @@ class ActionResponse(BaseModel):
     created_at: datetime
 
 
-def build_router(db: ConnectionSource, agent: Callable[[Connection], Agent]) -> APIRouter:
+def build_router(
+    db: ConnectionSource,
+    agent: Callable[[Connection], Agent],
+    embedder: EmbeddingProvider | None = None,
+) -> APIRouter:
     """Assemble the v1 routes.
 
     The agent arrives as a callable rather than an instance so it can be built
@@ -330,6 +375,113 @@ def build_router(db: ConnectionSource, agent: Callable[[Connection], Agent]) -> 
     )
     def rollback_action(conn: Conn, principal_id: Principal, action_id: UUID) -> ActionResponse:
         return _translate(lambda: approvals.request_rollback(conn, principal_id, action_id))
+
+    # -- notes -------------------------------------------------------------
+
+    def _note(load: Callable[[], notes.Note]) -> NoteResponse:
+        try:
+            return NoteResponse.model_validate(load())
+        except notes.NoteNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such note") from exc
+        except notes.NotYoursError as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+        except notes.NoteError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    @router.get(
+        "/scopes",
+        tags=["memory"],
+        summary="Where you can write a note",
+        description=(
+            "Personal is yours alone, team is the group's, org is everyone's. The "
+            "same scopes decide who can read a note back, so this is both the "
+            "write list and the read list."
+        ),
+    )
+    def get_scopes(conn: Conn, principal_id: Principal) -> list[ScopeResponse]:
+        return [
+            ScopeResponse.model_validate(scope) for scope in notes.scopes_for(conn, principal_id)
+        ]
+
+    @router.get(
+        "/notes",
+        tags=["memory"],
+        summary="Notes you can see",
+        description=(
+            "What the system has been told, by you and by anyone sharing a scope "
+            "with you. A note is retrievable memory: it is found and cited like "
+            "synced content, so this list is also a list of what can change an "
+            "answer."
+        ),
+    )
+    def get_notes(conn: Conn, principal_id: Principal, limit: int = 100) -> list[NoteResponse]:
+        return [
+            NoteResponse.model_validate(note)
+            for note in notes.list_notes(conn, principal_id, limit)
+        ]
+
+    @router.post(
+        "/notes",
+        tags=["memory"],
+        status_code=status.HTTP_201_CREATED,
+        summary="Write a note",
+    )
+    def post_note(conn: Conn, principal_id: Principal, body: NoteRequest) -> NoteResponse:
+        draft = notes.NoteDraft(
+            content=body.content,
+            scope_id=body.scope_id,
+            about_entity=body.about_entity,
+            pinned=body.pinned,
+        )
+        return _note(lambda: notes.write(conn, principal_id, draft, embedder))
+
+    @router.patch("/notes/{note_id}", tags=["memory"], summary="Change what a note says")
+    def patch_note(
+        conn: Conn, principal_id: Principal, note_id: UUID, body: NoteEdit
+    ) -> NoteResponse:
+        return _note(lambda: notes.edit(conn, principal_id, note_id, body.content, embedder))
+
+    @router.post("/notes/{note_id}/pin", tags=["memory"], summary="Pin or unpin")
+    def pin_note(
+        conn: Conn, principal_id: Principal, note_id: UUID, body: PinRequest
+    ) -> NoteResponse:
+        return _note(lambda: notes.set_pinned(conn, principal_id, note_id, body.pinned))
+
+    @router.post(
+        "/notes/{note_id}/supersede",
+        tags=["memory"],
+        summary="Retire a note",
+        description=(
+            "Stops the note informing answers and keeps what it said. 'What did "
+            "this used to say' is the question an editable memory exists to "
+            "answer, so the everyday action is reversible."
+        ),
+    )
+    def supersede_note(conn: Conn, principal_id: Principal, note_id: UUID) -> NoteResponse:
+        return _note(lambda: notes.supersede(conn, principal_id, note_id))
+
+    @router.post("/notes/{note_id}/restore", tags=["memory"], summary="Un-retire a note")
+    def restore_note(conn: Conn, principal_id: Principal, note_id: UUID) -> NoteResponse:
+        return _note(lambda: notes.restore(conn, principal_id, note_id, embedder))
+
+    @router.delete(
+        "/notes/{note_id}",
+        tags=["memory"],
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Erase a note permanently",
+        description=(
+            "Irreversible, and a separate verb from supersede on purpose: "
+            "someone who meant 'stop using this' should not reach 'it never "
+            "existed' by clicking the same button twice."
+        ),
+    )
+    def delete_note(conn: Conn, principal_id: Principal, note_id: UUID) -> None:
+        try:
+            notes.erase(conn, principal_id, note_id)
+        except notes.NoteNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such note") from exc
+        except notes.NotYoursError as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
 
     # -- traces ------------------------------------------------------------
 
