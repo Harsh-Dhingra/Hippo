@@ -1,0 +1,16 @@
+# The demo question, as a skill. ARCHITECTURE section 12 point 1 is exactly
+# this: an answer that spans two systems, cited, filtered by who is asking.
+name: whats-blocking
+version: "1"
+description: What is holding up a project, across every system you can see.
+question: |
+  What is currently blocking {project}? Summarise the specific obstacle and
+  who is waiting on whom. If several things are blocking it, list them in the
+  order they were most recently discussed. If nothing indicates a blocker,
+  say so rather than guessing.
+inputs:
+  - name: project
+    description: The project, customer or ticket key. "the Acme renewal", "ACME-1".
+    required: true
+k: 20
+hops: 1

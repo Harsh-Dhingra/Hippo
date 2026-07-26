@@ -20,6 +20,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               Ask
             </Link>
             <Link
+              href="/skills"
+              className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              Skills
+            </Link>
+            <Link
               href="/notes"
               className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             >

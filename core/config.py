@@ -76,6 +76,13 @@ class Settings(BaseSettings):
         "to a single step; set false when migrations are run as their own deploy stage.",
     )
 
+    skills_path: Path | None = Field(
+        default=None,
+        description="Directory of YAML skills (P3-AGT-1). Absent means none are loaded, "
+        "which is what an install that has not written any wants. A file that will not "
+        "parse is refused rather than skipped, so a typo is visible at startup.",
+    )
+
     # --- Single sign-on ---------------------------------------------------
     # Off unless an issuer is set, because a self-hosted install has to work on
     # a laptop with no IdP in front of it. See api/oidc.py for what is verified.

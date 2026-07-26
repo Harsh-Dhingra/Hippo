@@ -139,6 +139,10 @@ class AgentState(TypedDict, total=False):
     plan: RetrievalPlan
     hits: list[Hit]
     answer: Answer
+    # Which actions this run may propose, when a skill has narrowed them
+    # (P3-AGT-1). Absent means the full vocabulary; an empty frozenset means
+    # answer only, and is how a skill says it never acts.
+    allow: frozenset[str]
 
 
 def render_sources(hits: list[Hit]) -> str:
@@ -208,6 +212,11 @@ class Agent:
         the asking person's decision, and content from Slack must not be able
         to promote a question into a request.
         """
+        allow = state.get("allow")
+        if allow is not None and not allow:
+            # A skill that names no actions. Routing to propose would spend a
+            # model call to build something build_proposal would then refuse.
+            return "synthesize"
         if state.get("hits") and wants_action(state["question"]):
             return "propose"
         return "synthesize"
@@ -303,8 +312,9 @@ class Agent:
         question = state["question"]
         self._route_taken = "propose"
 
+        allow = state.get("allow")
         request = CompletionRequest(
-            system=propose_system_prompt(),
+            system=propose_system_prompt(allow),
             messages=(
                 Message(
                     role="user",
@@ -317,7 +327,7 @@ class Agent:
         completion = self._provider.complete(request)
 
         raw = None if completion.refused else parse_proposal(completion.text)
-        checked = None if raw is None else build_proposal(raw, hits, self._policy)
+        checked = None if raw is None else build_proposal(raw, hits, self._policy, allow)
 
         if raw is None or checked is None:
             LOG.info("no action proposed", extra={"question": question})
@@ -413,14 +423,22 @@ class Agent:
         *,
         k: int = DEFAULT_K,
         trace: bool = True,
+        allow: frozenset[str] | None = None,
     ) -> Answer:
-        """Answer one question as one principal, and record what it did."""
+        """Answer one question as one principal, and record what it did.
+
+        `allow` narrows what this run may propose and can never widen it; see
+        build_proposal(). A skill passes its own list, so running a skill is
+        the same call with a smaller vocabulary rather than a second path.
+        """
         self._conn = conn
         self._timer = StepTimer()
         self._last_request = None
         self._route_taken = "synthesize"
         trace_id = new_trace_id()
         state: AgentState = {"question": question, "principal_id": principal_id, "k": k}
+        if allow is not None:
+            state["allow"] = allow
 
         try:
             final: AgentState = self._graph.invoke(state)

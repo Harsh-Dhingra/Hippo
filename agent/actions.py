@@ -145,15 +145,24 @@ class _RawProposal(BaseModel):
     payload: dict[str, Any]
 
 
-def propose_system_prompt() -> str:
+def propose_system_prompt(allow: frozenset[str] | None = None) -> str:
     """The instructions for the proposal call.
 
     Separate from the answer prompt because the two ask for different things
     and mixing them would let a malformed proposal corrupt an answer.
+
+    `allow` narrows the catalogue the model is shown. Offering an action that
+    would then be rejected wastes a call and, worse, teaches the model to
+    propose things this run cannot do — but the narrowing here is presentation.
+    build_proposal() enforces it, because a prompt is a request and a check is
+    a guarantee.
     """
+    offered = sorted(actions().values(), key=lambda spec: spec.action_type)
+    if allow is not None:
+        offered = [spec for spec in offered if spec.action_type in allow]
     catalogue = "\n".join(
         f"- {spec.action_type}: {spec.description} payload {spec.payload_schema}"
-        for spec in sorted(actions().values(), key=lambda spec: spec.action_type)
+        for spec in offered
     )
     return (
         "You turn a request into at most one proposed action. You do not "
@@ -213,17 +222,33 @@ def parse_proposal(text: str) -> _RawProposal | None:
 
 
 def build_proposal(
-    raw: _RawProposal, hits: list[Hit], policy: RiskPolicy
+    raw: _RawProposal,
+    hits: list[Hit],
+    policy: RiskPolicy,
+    allow: frozenset[str] | None = None,
 ) -> tuple[str, UUID, UUID, dict[str, Any], RiskClass] | None:
     """Check a raw proposal against the vocabulary and the visible sources.
 
     Returns None on anything that does not check out. Every rejection here is a
     case where continuing would mean writing to a production system on the
     strength of something not fully understood.
+
+    `allow` narrows the vocabulary for one call and can never widen it: a skill
+    (P3-AGT-1) names the actions it may propose, and the check below is an
+    intersection with what connectors declare rather than a substitute for it.
+    None means the full vocabulary; an empty set means propose nothing, which
+    is what a skill that only answers should be able to say.
     """
     spec = actions().get(raw.action_type)
     if spec is None:
         LOG.warning("dropped a proposal for an unknown action", extra={"action": raw.action_type})
+        return None
+
+    if allow is not None and raw.action_type not in allow:
+        LOG.warning(
+            "dropped a proposal for an action this run may not take",
+            extra={"action": raw.action_type, "allowed": sorted(allow)},
+        )
         return None
 
     if not 1 <= raw.source <= len(hits):

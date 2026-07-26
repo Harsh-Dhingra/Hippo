@@ -38,7 +38,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.links import ConnectorDirectory, load_directory
-from agent.loop import Agent
+from agent.loop import Agent, Answer
+from agent.skills import Skill, SkillError, load_dir, prepare, summarise
 from agent.timeline import build as build_timeline
 from agent.trace import list_traces, load_trace
 from api import approvals, auth, notes, oidc
@@ -124,6 +125,31 @@ class SSOCallbackRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     k: int = Field(default=12, ge=1, le=100)
+
+
+class SkillInputResponse(BaseModel):
+    name: str
+    description: str
+    required: bool
+    default: str | None
+
+
+class SkillResponse(BaseModel):
+    name: str
+    version: str
+    description: str
+    inputs: list[SkillInputResponse]
+    # Whether running it can produce a pending action. Shown so somebody can
+    # tell an answering skill from an acting one before they run it.
+    proposes: bool
+    actions: list[str]
+
+
+class SkillRunRequest(BaseModel):
+    inputs: dict[str, str] = Field(default_factory=dict)
+    # Overridable per run because a caller may want a wider sweep than the
+    # skill's author chose. It cannot widen anything but the context budget.
+    k: int | None = Field(default=None, ge=1, le=100)
 
 
 class CitationResponse(BaseModel):
@@ -265,6 +291,44 @@ class ActionResponse(BaseModel):
     created_at: datetime
 
 
+def _query_response(answer: Answer) -> QueryResponse:
+    """One answer, as the wire sees it.
+
+    Shared by /queries and /skills/{name}/run because a skill is the same call
+    with a different question — and two copies of this would eventually differ
+    in which fields they carried.
+    """
+    return QueryResponse(
+        answer=answer.text,
+        citations=[
+            CitationResponse(
+                marker=citation.marker,
+                entity_id=citation.entity_id,
+                entity_type=citation.entity_type,
+                title=citation.title,
+                url=citation.url,
+            )
+            for citation in answer.citations
+        ],
+        trace_id=answer.trace_id,
+        refused=answer.refused,
+        proposal=(
+            None
+            if answer.proposal is None
+            else ProposalResponse(
+                id=answer.proposal.id,
+                action_type=answer.proposal.action_type,
+                summary=answer.proposal.summary,
+                risk_class=answer.proposal.risk_class,
+                status=answer.proposal.status,
+            )
+        ),
+        model=answer.model,
+        input_tokens=answer.usage.input_tokens,
+        output_tokens=answer.usage.output_tokens,
+    )
+
+
 def build_router(
     db: ConnectionSource,
     agent: Callable[[Connection], Agent],
@@ -281,6 +345,10 @@ def build_router(
     cached_directory: dict[str, ConnectorDirectory] = {}
     resolved = settings or get_settings()
     cached_sso: dict[str, oidc.Client] = {}
+    # Loaded once at build. A skill is operator configuration, so it changes
+    # when somebody deploys a file, not per request — and a reload-per-request
+    # would put a disk read on the answer path.
+    skills: dict[str, Skill] = load_dir(resolved.skills_path) if resolved.skills_path else {}
 
     def sso() -> oidc.Client:
         """The IdP client, built on first use.
@@ -441,6 +509,50 @@ def build_router(
             redirect_to=redirect_to,
         )
 
+    # -- skills ------------------------------------------------------------
+
+    @router.get("/skills", tags=["skills"], summary="Skills this install has")
+    def list_skills(user: CurrentUser) -> list[SkillResponse]:
+        return [SkillResponse.model_validate(item) for item in summarise(skills)]
+
+    @router.post("/skills/{name}/run", tags=["skills"], summary="Run a skill")
+    def run_skill(
+        conn: Conn,
+        principal_id: Principal,
+        name: str,
+        body: SkillRunRequest,
+    ) -> QueryResponse:
+        """Run a named skill as the person asking.
+
+        The same call as /queries with a different question and a narrower
+        action vocabulary. There is deliberately no way to run a skill as
+        somebody else: a skill that could would be a route to content its
+        caller cannot read, which is the one thing this system exists to
+        prevent.
+        """
+        skill = skills.get(name)
+        if skill is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such skill")
+
+        try:
+            run = prepare(skill, body.inputs)
+        except SkillError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+        built = agent(conn)
+        with as_agent(conn):
+            answer = built.answer(
+                conn,
+                principal_id,
+                run.question,
+                k=body.k or skill.k,
+                # An intersection with what connectors declare, never a union.
+                # A skill with no actions passes an empty set, which routes
+                # straight to answering.
+                allow=frozenset(skill.actions),
+            )
+        return _query_response(answer)
+
     # -- queries -----------------------------------------------------------
 
     @router.post(
@@ -459,38 +571,10 @@ def build_router(
         # agent/links.py loads it once, from a component that can, and hands it
         # over. Building it inside the reduction would be asking the agent to
         # read a table the whole design says it should not reach.
-        resolved = agent(conn)
+        built = agent(conn)
         with as_agent(conn):
-            answer = resolved.answer(conn, principal_id, body.question, k=body.k)
-        return QueryResponse(
-            answer=answer.text,
-            citations=[
-                CitationResponse(
-                    marker=citation.marker,
-                    entity_id=citation.entity_id,
-                    entity_type=citation.entity_type,
-                    title=citation.title,
-                    url=citation.url,
-                )
-                for citation in answer.citations
-            ],
-            trace_id=answer.trace_id,
-            refused=answer.refused,
-            proposal=(
-                None
-                if answer.proposal is None
-                else ProposalResponse(
-                    id=answer.proposal.id,
-                    action_type=answer.proposal.action_type,
-                    summary=answer.proposal.summary,
-                    risk_class=answer.proposal.risk_class,
-                    status=answer.proposal.status,
-                )
-            ),
-            model=answer.model,
-            input_tokens=answer.usage.input_tokens,
-            output_tokens=answer.usage.output_tokens,
-        )
+            answer = built.answer(conn, principal_id, body.question, k=body.k)
+        return _query_response(answer)
 
     # -- actions -----------------------------------------------------------
 

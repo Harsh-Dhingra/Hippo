@@ -1,0 +1,15 @@
+# The question a new joiner asks in week one and nobody can answer without
+# reading six months of a channel.
+name: decision-log
+version: "1"
+description: What was decided about something, when, and by whom.
+question: |
+  What has been decided about {topic}? For each decision give the outcome, the
+  date it was made, and who made it. Where a later decision reversed an earlier
+  one, say so and keep both. Do not present a proposal as a decision.
+inputs:
+  - name: topic
+    description: The subject. "the discount floor", "the migration timeline".
+    required: true
+k: 25
+hops: 2

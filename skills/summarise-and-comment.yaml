@@ -1,0 +1,18 @@
+# A skill that proposes. It still cannot execute: the action is a pending row
+# and waits for a person, exactly as every other proposal does. Naming an
+# action here narrows what may be proposed; it never widens it.
+name: summarise-and-comment
+version: "1"
+description: Summarise what is known about an issue and propose posting it as a comment.
+question: |
+  Summarise what is known about {issue} and add that summary as a comment on
+  it. Keep the summary to what the sources actually say and cite them.
+inputs:
+  - name: issue
+    description: The issue key. "ACME-1", "acme/web#3".
+    required: true
+k: 20
+hops: 1
+actions:
+  - jira.comment
+  - github.comment
