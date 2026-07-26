@@ -38,6 +38,10 @@ services:
       HIPPO_DATABASE_URL: postgresql://${POSTGRES_USER:-hippo}:${POSTGRES_PASSWORD:-hippo}@postgres:5432/${POSTGRES_DB:-hippo}
       HIPPO_LOG_LEVEL: ${HIPPO_LOG_LEVEL:-INFO}
       HIPPO_SERVICE_NAME: hippo-api
+      # The three worked examples, so `docker compose up` has skills to show.
+      # The scheduler loop starts with them and finds nothing due, which is
+      # what an install with no standing questions should cost.
+      HIPPO_SKILLS_PATH: /app/skills
     depends_on:
       postgres:
         condition: service_healthy
