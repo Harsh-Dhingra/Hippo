@@ -11,6 +11,17 @@
 import { redirect } from "next/navigation";
 import { NotAuthenticated, api, type User } from "./api";
 
+/**
+ * Names the in-flight SSO login so the callback can tell it was this browser
+ * that started it.
+ *
+ * Here rather than in the route that sets it: a Next.js route handler may only
+ * export HTTP verbs and a short list of config fields, and `export const
+ * SSO_STATE_COOKIE` in one is a build error that neither eslint nor
+ * `tsc --noEmit` reports — only `next build` does.
+ */
+export const SSO_STATE_COOKIE = "hippo_sso_state";
+
 export const COOKIE_OPTIONS = {
   httpOnly: true,
   sameSite: "lax",

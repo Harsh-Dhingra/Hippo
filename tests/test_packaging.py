@@ -188,3 +188,51 @@ def test_no_env_file_is_tracked() -> None:
     leaked = [path for path in tracked if Path(path).name in (".env", ".env.local")]
 
     assert leaked == []
+
+
+# Next.js route handlers may export HTTP verbs and a short list of config
+# fields, and nothing else. Anything extra is a build error that neither eslint
+# nor `tsc --noEmit` reports — only `next build` does, which is the slowest gate
+# and the one furthest from whoever wrote the line.
+ROUTE_EXPORTS = frozenset(
+    {
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH",
+        "OPTIONS",
+        "dynamic",
+        "dynamicParams",
+        "revalidate",
+        "fetchCache",
+        "runtime",
+        "preferredRegion",
+        "maxDuration",
+    }
+)
+
+EXPORTED = re.compile(r"^export\s+(?:async\s+)?(?:function|const|let|var)\s+(\w+)", re.MULTILINE)
+
+
+def test_no_route_handler_exports_something_next_will_reject() -> None:
+    """Caught here in a second rather than in `next build` in five minutes.
+
+    The bug this is for: `export const SSO_STATE_COOKIE` in a route handler.
+    It type-checks, it lints, and it fails the production build — so a shared
+    constant belongs in lib/, not beside the handler that happens to set it.
+    """
+    offenders: list[str] = []
+    for path in (ROOT / "ui" / "app").rglob("route.ts"):
+        for name in EXPORTED.findall(path.read_text()):
+            if name not in ROUTE_EXPORTS:
+                offenders.append(f"{path.relative_to(ROOT)} exports {name}")
+
+    assert offenders == [], "; ".join(offenders)
+
+
+def test_the_ui_has_route_handlers_to_check() -> None:
+    """A guard on the guard: a rename of the app directory would make the test
+    above pass by finding nothing."""
+    assert list((ROOT / "ui" / "app").rglob("route.ts"))

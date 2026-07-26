@@ -13,8 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { ApiError, SESSION_COOKIE, api, type Session } from "@/lib/api";
-import { COOKIE_OPTIONS } from "@/lib/session";
-import { SSO_STATE_COOKIE } from "@/app/api/sso/route";
+import { COOKIE_OPTIONS, SSO_STATE_COOKIE } from "@/lib/session";
 
 type SsoSession = Session & { redirect_to?: string | null };
 

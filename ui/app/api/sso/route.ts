@@ -18,9 +18,7 @@
 
 import { NextResponse } from "next/server";
 import { ApiError, api } from "@/lib/api";
-import { COOKIE_OPTIONS } from "@/lib/session";
-
-export const SSO_STATE_COOKIE = "hippo_sso_state";
+import { COOKIE_OPTIONS, SSO_STATE_COOKIE } from "@/lib/session";
 
 type Start = { authorization_url: string; state: string };
 
