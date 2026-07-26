@@ -23,8 +23,10 @@ from agent.links import load_directory
 from agent.loop import Agent
 from agent.policy import load_policy
 from agent.providers import build_provider
+from agent.scheduled import run_due
+from agent.skills import load_dir
 from api.approvals import auto_approve_pending
-from api.routes import build_router
+from api.routes import as_agent, build_router
 from core.alerts import notify
 from core.config import Settings, get_settings
 from core.db import Connection, Database, connect
@@ -151,6 +153,44 @@ async def _deliver_alerts(db: Database, settings: Settings) -> None:
             LOG.error("alert delivery failed", extra={"error": str(exc)})
 
 
+async def _run_scheduled_skills(
+    db: Database,
+    settings: Settings,
+    agent: Callable[[Connection], Agent],
+) -> None:
+    """Fire standing questions when they come due.
+
+    In this process rather than the sync worker, because running a skill is a
+    model call and ARCHITECTURE section 2 says the only component that talks to
+    the model is the agent service. Putting it in the worker would mean the
+    process holding Slack and Jira credentials also held a model key.
+
+    Silent when no skills are configured, which is the default. The loop
+    survives its own failures for the same reason the other two do: a scheduler
+    that died on one bad tick would stop firing without anyone noticing.
+    """
+    if not settings.skills_path:
+        return
+
+    skills = load_dir(settings.skills_path)
+    if not skills:
+        return
+
+    LOG.info("scheduled skills enabled", extra={"skills": sorted(skills)})
+    while True:
+        await asyncio.sleep(settings.skill_interval_seconds)
+        try:
+            # Under the agent's privileges, exactly as an interactive query is.
+            # A scheduled run must not be able to read anything an asked one
+            # could not.
+            with db.connection(timeout=5.0) as conn, as_agent(conn):
+                ran = run_due(conn, skills, agent(conn))
+            if ran:
+                LOG.info("scheduled skills ran", extra={"count": ran})
+        except Exception as exc:
+            LOG.error("scheduled skill tick failed", extra={"error": str(exc)})
+
+
 class _LazyDatabase:
     """Defers to app.state.db, which the lifespan sets.
 
@@ -199,10 +239,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # what decides still cannot be what acts.
         sweeper = asyncio.create_task(_sweep(db, resolved))
         alerter = asyncio.create_task(_deliver_alerts(db, resolved))
+        scheduler = asyncio.create_task(_run_scheduled_skills(db, resolved, agent))
         try:
             yield
         finally:
-            for task in (sweeper, alerter):
+            for task in (sweeper, alerter, scheduler):
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task

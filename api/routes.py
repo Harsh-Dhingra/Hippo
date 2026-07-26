@@ -39,6 +39,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent.links import ConnectorDirectory, load_directory
 from agent.loop import Agent, Answer
+from agent.scheduled import ScheduleError
+from agent.scheduled import create as create_schedule
+from agent.scheduled import delete as delete_schedule
+from agent.scheduled import for_principal as schedules_for
+from agent.scheduled import set_enabled as set_schedule_enabled
 from agent.skills import Skill, SkillError, load_dir, prepare, summarise
 from agent.timeline import build as build_timeline
 from agent.trace import list_traces, load_trace
@@ -143,6 +148,35 @@ class SkillResponse(BaseModel):
     # tell an answering skill from an acting one before they run it.
     proposes: bool
     actions: list[str]
+
+
+class ScheduleRequest(BaseModel):
+    cadence: str = Field(default="daily", pattern="^(hourly|daily|weekly)$")
+    at_hour: int = Field(default=9, ge=0, le=23)
+    # ISO weekday, 1 = Monday.
+    at_weekday: int = Field(default=1, ge=1, le=7)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+class ScheduleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    skill: str
+    inputs: dict[str, str]
+    cadence: str
+    at_hour: int
+    at_weekday: int
+    enabled: bool
+    # Plain enough to read in a list without decoding three numbers.
+    describes: str
+    last_run_at: datetime | None
+    last_error: str | None
+    next_run_at: datetime | None
+
+
+class SchedulePauseRequest(BaseModel):
+    enabled: bool
 
 
 class SkillRunRequest(BaseModel):
@@ -552,6 +586,70 @@ def build_router(
                 allow=frozenset(skill.actions),
             )
         return _query_response(answer)
+
+    @router.get("/schedules", tags=["skills"], summary="Your standing questions")
+    def get_schedules(conn: Conn, principal_id: Principal) -> list[ScheduleResponse]:
+        return [ScheduleResponse.model_validate(item) for item in schedules_for(conn, principal_id)]
+
+    @router.post(
+        "/skills/{name}/schedule",
+        tags=["skills"],
+        status_code=status.HTTP_201_CREATED,
+        summary="Run a skill on a schedule",
+    )
+    def schedule_skill(
+        conn: Conn,
+        principal_id: Principal,
+        name: str,
+        body: ScheduleRequest,
+    ) -> ScheduleResponse:
+        """Record a standing question, running as the person who asked for it.
+
+        `runs_as` is not a parameter and never will be. A schedule that could
+        name somebody else would be a route to their content, and the answer a
+        schedule produces is exactly what its owner would have got by asking.
+        """
+        skill = skills.get(name)
+        if skill is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such skill")
+        try:
+            created = create_schedule(
+                conn,
+                skill=skill,
+                runs_as=principal_id,
+                inputs=body.inputs,
+                cadence=body.cadence,
+                at_hour=body.at_hour,
+                at_weekday=body.at_weekday,
+                created_by=principal_id,
+            )
+        except ScheduleError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        return ScheduleResponse.model_validate(created)
+
+    @router.post("/schedules/{schedule_id}/pause", tags=["skills"], summary="Pause or resume")
+    def pause_schedule(
+        conn: Conn, principal_id: Principal, schedule_id: UUID, body: SchedulePauseRequest
+    ) -> ScheduleResponse:
+        if not set_schedule_enabled(conn, schedule_id, principal_id, body.enabled):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such schedule")
+        found = next(
+            (item for item in schedules_for(conn, principal_id) if item.id == schedule_id), None
+        )
+        assert found is not None
+        return ScheduleResponse.model_validate(found)
+
+    @router.delete(
+        "/schedules/{schedule_id}",
+        tags=["skills"],
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Stop a standing question",
+    )
+    def remove_schedule(conn: Conn, principal_id: Principal, schedule_id: UUID) -> None:
+        """404 for somebody else's, the same as for one that never existed —
+        a different answer would be a way to find out what other people run."""
+        if not delete_schedule(conn, schedule_id, principal_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such schedule")
 
     # -- queries -----------------------------------------------------------
 

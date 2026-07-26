@@ -518,3 +518,126 @@ def test_an_unknown_input_over_http_is_a_400(
 
     assert response.status_code == 400
     assert "unknown input" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Scheduling one, over HTTP.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+def test_a_schedule_is_created_for_the_person_who_asked(
+    db_dsn: str, skill_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`runs_as` is not a parameter and never will be. A schedule that could
+    name somebody else would be a route to their content."""
+    from tests.skill_client import client_for
+
+    with client_for(db_dsn, skill_dir, monkeypatch) as (client, token):
+        auth = {"Authorization": f"Bearer {token}"}
+        created = client.post(
+            "/api/v1/skills/whats-blocking/schedule",
+            json={"cadence": "weekly", "at_hour": 9, "at_weekday": 1, "inputs": {"project": "x"}},
+            headers=auth,
+        )
+        listed = client.get("/api/v1/schedules", headers=auth)
+
+    assert created.status_code == 201
+    assert created.json()["describes"] == "every Monday at 09:00 UTC"
+    assert [item["skill"] for item in listed.json()] == ["whats-blocking"]
+
+
+@pytest.mark.requires_db
+def test_scheduling_an_unknown_skill_is_a_404(
+    db_dsn: str, skill_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.skill_client import client_for
+
+    with client_for(db_dsn, skill_dir, monkeypatch) as (client, token):
+        response = client.post(
+            "/api/v1/skills/nope/schedule",
+            json={"inputs": {}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.requires_db
+def test_scheduling_with_bad_inputs_is_a_400(
+    db_dsn: str, skill_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checked when the schedule is made, not at the hour it was meant to fire."""
+    from tests.skill_client import client_for
+
+    with client_for(db_dsn, skill_dir, monkeypatch) as (client, token):
+        response = client.post(
+            "/api/v1/skills/whats-blocking/schedule",
+            json={"inputs": {}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 400
+    assert "required" in response.json()["detail"]
+
+
+@pytest.mark.requires_db
+def test_a_schedule_can_be_paused_and_removed(
+    db_dsn: str, skill_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.skill_client import client_for
+
+    with client_for(db_dsn, skill_dir, monkeypatch) as (client, token):
+        auth = {"Authorization": f"Bearer {token}"}
+        created = client.post(
+            "/api/v1/skills/whats-blocking/schedule",
+            json={"inputs": {"project": "x"}},
+            headers=auth,
+        ).json()
+
+        paused = client.post(
+            f"/api/v1/schedules/{created['id']}/pause", json={"enabled": False}, headers=auth
+        )
+        removed = client.delete(f"/api/v1/schedules/{created['id']}", headers=auth)
+        left = client.get("/api/v1/schedules", headers=auth)
+
+    assert paused.status_code == 200
+    assert paused.json()["enabled"] is False
+    assert removed.status_code == 204
+    assert left.json() == []
+
+
+@pytest.mark.requires_db
+def test_somebody_elses_schedule_is_a_404_not_a_403(
+    db_dsn: str, skill_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different answer would be a way to find out what other people run."""
+    from tests.skill_client import client_for
+
+    with client_for(db_dsn, skill_dir, monkeypatch) as (client, token):
+        auth = {"Authorization": f"Bearer {token}"}
+        made_up = "00000000-0000-0000-0000-0000000000ff"
+
+        assert client.delete(f"/api/v1/schedules/{made_up}", headers=auth).status_code == 404
+        assert (
+            client.post(
+                f"/api/v1/schedules/{made_up}/pause", json={"enabled": False}, headers=auth
+            ).status_code
+            == 404
+        )
+
+
+@pytest.mark.requires_db
+def test_an_invalid_cadence_never_reaches_the_database(
+    db_dsn: str, skill_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.skill_client import client_for
+
+    with client_for(db_dsn, skill_dir, monkeypatch) as (client, token):
+        response = client.post(
+            "/api/v1/skills/whats-blocking/schedule",
+            json={"cadence": "fortnightly", "inputs": {"project": "x"}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 422

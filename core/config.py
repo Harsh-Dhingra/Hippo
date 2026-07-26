@@ -76,6 +76,12 @@ class Settings(BaseSettings):
         "to a single step; set false when migrations are run as their own deploy stage.",
     )
 
+    skill_interval_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="How often the API checks for scheduled skills that are due. Cadences "
+        "are hourly at finest, so this only has to be smaller than an hour.",
+    )
     skills_path: Path | None = Field(
         default=None,
         description="Directory of YAML skills (P3-AGT-1). Absent means none are loaded, "

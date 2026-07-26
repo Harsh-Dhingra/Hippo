@@ -58,6 +58,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "users": NONE,
         "sessions": NONE,
         "auth_flows": NONE,
+        "skill_schedules": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -83,6 +84,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "users": NONE,
         "sessions": NONE,
         "auth_flows": NONE,
+        "skill_schedules": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -111,6 +113,7 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         "users": NONE,
         "sessions": NONE,
         "auth_flows": NONE,
+        "skill_schedules": NONE,
         "action_events": NONE,
         "alerts": NONE,
     },
@@ -124,6 +127,10 @@ EXPECTED_GRANTS: dict[str, dict[str, frozenset[str]]] = {
         # login screen and by nothing else: a sync worker holding the PKCE
         # verifier for somebody's login has no reason to and every risk of it.
         "auth_flows": WRITE,
+        # Standing questions. Managed and fired here rather than in the sync
+        # worker, because running a skill is a model call and the worker holds
+        # source-system credentials — see migration 022.
+        "skill_schedules": WRITE,
         # Approve and decline. Not INSERT: a proposal comes from the agent, and
         # an API that could mint its own would make the split decorative.
         "actions": frozenset({"SELECT", "UPDATE"}),
@@ -423,6 +430,9 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
             "hippo_api",
             [
                 "acknowledge_alert",
+                # Scheduled skills. Claimed and advanced here; the sync worker
+                # gets no grant at all.
+                "claim_due_skills",
                 # Offboarding. Disabling a user has to reach their live
                 # sessions too, or a seven-day cookie outlives the account.
                 "disable_user",
@@ -430,9 +440,13 @@ def test_roles_migration_is_deliberately_irreversible() -> None:
                 "my_action_events",
                 "my_notes",
                 "my_principals",
+                # Somebody's own standing questions. A list of other people's
+                # is a list of what they care about, which is not nothing.
+                "my_schedules",
                 "my_scopes",
                 "my_trace",
                 "my_traces",
+                "next_skill_run",
                 "open_alerts",
                 "project_note",
                 "raise_alert",

@@ -148,6 +148,16 @@ Decision: resolver reads only `raw_records`, writes only graph tables. If resolu
 | 9 | Passwords stay alongside SSO | SSO-only once configured | Never — an install whose only way in is the IdP has none when the IdP is down |
 | 10 | Connectors are registered through entry points; capabilities are declared | `if kind ==` dispatch and `isinstance` checks | Never — both are unavailable for a class this process has never imported |
 | 11 | The write-back vocabulary is assembled from connectors | A literal in the agent | Never — a literal makes every third-party connector read-only |
+| 12 | A scheduled skill runs as a named principal | A service account with broad access | Never — that account's reach becomes every digest's reach |
+
+**On 12.** P3-AGT-2. A standing digest is the first read in this system with
+nobody present, and the permission filter answers "what may *you* see", so a
+scheduled run needs a whose. `skill_schedules.runs_as` is NOT NULL with a
+foreign key and there is no system principal. The answer a schedule produces is
+exactly what its owner would have got by asking, and it is visible to them
+alone. The alternative — a service account posting summaries into a channel —
+is how a memory system becomes the thing that leaks, and it is not expressible:
+there is no row shape for it.
 
 **On 10 and 11.** SDK v1 (P3-SDK-1). The vocabulary stays closed against
 content: `action_definitions()` reads the plugin registry, and the registry is

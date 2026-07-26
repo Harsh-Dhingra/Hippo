@@ -717,6 +717,12 @@ def test_the_openapi_document_covers_every_v1_route(client: TestClient) -> None:
         "/api/v1/auth/sso/start",
         "/api/v1/auth/sso/callback",
         "/api/v1/me",
+        "/api/v1/skills",
+        "/api/v1/skills/{name}/run",
+        "/api/v1/skills/{name}/schedule",
+        "/api/v1/schedules",
+        "/api/v1/schedules/{schedule_id}",
+        "/api/v1/schedules/{schedule_id}/pause",
         "/api/v1/queries",
         "/api/v1/actions",
         "/api/v1/actions/{action_id}",
@@ -777,7 +783,10 @@ def test_every_v1_route_requires_authentication(client: TestClient, world: Conne
         for method in methods:
             response = client.request(
                 method,
-                path.replace("{action_id}", str(uuid4())).replace("{trace_id}", str(uuid4())),
+                path.replace("{action_id}", str(uuid4()))
+                .replace("{trace_id}", str(uuid4()))
+                .replace("{schedule_id}", str(uuid4()))
+                .replace("{name}", "nope"),
                 json={},
             )
             assert response.status_code == 401, f"{method.upper()} {path} did not require auth"
