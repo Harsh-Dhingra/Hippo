@@ -118,6 +118,23 @@ class Report(BaseModel):
             scored
         )
 
+    def mrr_for(self, kind: str) -> float:
+        """Mean reciprocal rank over one family of case.
+
+        The headline MRR moves when the case mix changes, which makes it
+        useless for deciding whether ranking got worse. A graph-dependent case
+        answers at a deliberately lower rank than a keyword one — a hop costs
+        about seven places — so adding twenty-four of them lowers the mean
+        without anything having regressed. Per-kind is what can be compared
+        across corpora.
+        """
+        scored = [r for r in self.results if r.case_id.startswith(kind) and r.expected]
+        if not scored:
+            return 0.0
+        return sum(0.0 if r.first_rank is None else 1.0 / r.first_rank for r in scored) / len(
+            scored
+        )
+
     def recall_for(self, kind: str) -> float:
         """Recall over one family of case.
 
@@ -167,8 +184,10 @@ class Report(BaseModel):
         ]
         for mode, recall in self.recall_by_mode().items():
             lines.append(f"  by {mode:<10} {recall:.3f}")
-        for kind in ("lexical", "semantic", "traversal"):
-            lines.append(f"  {kind:<13} {self.recall_for(kind):.3f}")
+        for kind in ("lexical", "semantic", "traversal", "crossref"):
+            lines.append(
+                f"  {kind:<13} recall {self.recall_for(kind):.3f}  mrr {self.mrr_for(kind):.3f}"
+            )
         for result in self.results:
             missed = [item.needle for item in result.expected if not item.hit]
             if missed or result.leaked:

@@ -39,17 +39,34 @@ pytestmark = [pytest.mark.requires_db, pytest.mark.eval]
 # are the same on every machine. That is what makes them safe to gate on: the
 # filter breaks score ties by chunk id, and random ids moved the result by
 # several points between runs.
-FLOOR_RECALL_AT_20 = 0.70
+FLOOR_RECALL_AT_20 = 0.78
 # The default k, and the number that moved when P3-GRF-1 made the walk typed
 # and directional: recall 0.655 -> 0.747 and traversal 0.417 -> 0.792, measured
 # controlled on identical rows. Floored here so the win cannot quietly regress
 # — a k=20-only floor would have let it, because at k=20 the old walk
 # eventually caught up. That was the defect: it needed a budget nobody uses.
-FLOOR_RECALL_AT_12 = 0.70
+FLOOR_RECALL_AT_12 = 0.75
 FLOOR_TRAVERSAL_AT_12 = 0.70
-FLOOR_MRR = 0.35
+# Cross-system references (P3-GRF-2). Measured 0.000 at k=10 against the old
+# walk on identical rows, so this number is the graph or it is nothing: the
+# question names a ticket key that appears only in a message, and the answer
+# lives in the ticket sharing none of its words.
+FLOOR_CROSSREF_AT_12 = 0.85
+# Recalibrated for the case mix, not weakened to pass. P3-GRF-2 added
+# twenty-four cases whose answer is reachable only by a graph hop, and a hop
+# deliberately costs about seven rank places — so they sit at MRR ~0.12, which
+# is rank 8 and exactly the design. The global mean fell 0.400 -> 0.329 on that
+# composition alone.
+#
+# The evidence that nothing regressed is the controlled run in P3-GRF-1: same
+# rows, same HNSW graph, old walk against new, recall up at every k and down at
+# none. And the number below that must never move is the lexical one.
+FLOOR_MRR = 0.30
+# Keyword questions must keep answering at rank one. This is the MRR floor with
+# teeth; the global one is a smoke check over a mix that will keep changing.
+FLOOR_MRR_LEXICAL = 0.95
 FLOOR_LEXICAL = 0.95
-FLOOR_TRAVERSAL = 0.65
+FLOOR_TRAVERSAL = 0.75
 # The lexical embedder is genuinely poor at paraphrase, and pretending
 # otherwise with a high floor would make this number meaningless. It is here to
 # be watched when a real embedding model is chosen at P1-RES-3, and to be
@@ -107,7 +124,7 @@ def test_the_corpus_is_deterministic(seeded: tuple[Connection, Corpus]) -> None:
     """Numbers that move between runs are numbers nobody gates on."""
     _, corpus = seeded
 
-    assert fingerprint(corpus) == "bb4b7ee414dfe915"
+    assert fingerprint(corpus) == "0add22b729ac16f6"
 
 
 def test_every_mode_has_something_only_it_can_find(
@@ -116,7 +133,7 @@ def test_every_mode_has_something_only_it_can_find(
     _, corpus = seeded
     kinds = {fact.kind for fact in corpus.facts}
 
-    assert kinds == {"lexical", "semantic", "traversal"}
+    assert kinds == {"lexical", "semantic", "traversal", "crossref"}
 
 
 def test_some_of_it_is_private(seeded: tuple[Connection, Corpus]) -> None:
@@ -148,6 +165,7 @@ def test_the_answer_ranks_near_the_top(seeded: tuple[Connection, Corpus]) -> Non
     report = run(conn, cases_from(corpus), k=20)
 
     assert report.mrr >= FLOOR_MRR, report.summary()
+    assert report.mrr_for("lexical") >= FLOOR_MRR_LEXICAL, report.summary()
 
 
 def test_keyword_retrieval_finds_the_rare_tokens(seeded: tuple[Connection, Corpus]) -> None:
@@ -188,6 +206,7 @@ def test_the_graph_earns_its_place_at_the_default_k(
 
     assert report.recall_at_k >= FLOOR_RECALL_AT_12, report.summary()
     assert report.recall_for("traversal") >= FLOOR_TRAVERSAL_AT_12, report.summary()
+    assert report.recall_for("crossref") >= FLOOR_CROSSREF_AT_12, report.summary()
     assert "graph" in report.recall_by_mode(), report.summary()
 
 
@@ -444,7 +463,7 @@ def test_the_report_cli_runs_and_says_zero_leaks(
 
     printed = capsys.readouterr().out
     assert "corpus" in printed
-    assert "432 chunks" in printed
+    assert "456 chunks" in printed
     assert "k=20" in printed
     assert "leaks          0" in printed
 

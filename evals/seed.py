@@ -209,6 +209,29 @@ def build(
             if fact is not None:
                 facts.append(fact)
 
+            if position == 16:
+                anchor = entity
+
+        # The ticket the anchor message referenced. Granted to the same roster,
+        # so the case measures retrieval rather than permission — and a private
+        # channel's ticket stays private, which the denied case checks.
+        ticket_key = _ticket_key(index)
+        ticket = _entity(conn, "ticket", ticket_key, f"ticket:{ticket_key}")
+        _grant(conn, ticket, [principals[person] for person in roster])
+        answer = f"waiting on the compliance sign-off before anything ships, per {name}"
+        _chunk(conn, ticket, answer, f"ticket:{ticket_key}", embed)
+        total_chunks += 1
+        _edge(conn, anchor, ticket, "references")
+        facts.append(
+            Fact(
+                kind="crossref",
+                question=f"what is the hold-up on {ticket_key}",
+                answer=answer,
+                channel=name,
+                private=private,
+            )
+        )
+
     return Corpus(facts=tuple(facts), chunks=total_chunks, channels=channels, members=members)
 
 
@@ -257,6 +280,13 @@ def _message(
             private=private,
         )
 
+    # A cross-system reference (P3-GRF-2). The message names a ticket key and
+    # says nothing else; the answer lives in the ticket, sharing no words with
+    # the question. Only the `references` edge connects them, so this case is
+    # zero unless the graph is working — which is the point of having it.
+    if position == 16:
+        return f"tracked in {_ticket_key(channel_index)}", None
+
     # Noise and boilerplate, at roughly the density a real workspace has. The
     # positions are fixed rather than random so the corpus stays reproducible.
     if position in (1, 5, 9, 14):
@@ -272,6 +302,15 @@ def _message(
 # a graph built to a specification, not one discovered from raw records, and
 # going through extraction would make the specification implicit.
 # ---------------------------------------------------------------------------
+
+
+def _ticket_key(channel_index: int) -> str:
+    """A Jira-shaped key unique to one channel.
+
+    Rare on purpose: the question is the key, so a key that appeared anywhere
+    else would let lexical search answer a case meant to need a graph hop.
+    """
+    return f"EVL{channel_index:02d}-{100 + channel_index}"
 
 
 def _entity(conn: Connection, entity_type: str, title: str, key: str) -> UUID:
