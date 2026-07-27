@@ -32,6 +32,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.db import Connection
+from resolver import references
 from sync.connectors.sdk import SourceRef
 
 LOG = logging.getLogger("hippo.resolver.extraction")
@@ -231,6 +232,11 @@ def extract_slack_message(record: RawRecord) -> Extraction:
             EdgeCandidate(src=record.ref, dst=_person_ref(record, mentioned), edge_type=MENTIONS)
         )
 
+    # The edge that makes this a graph rather than two indexes. Without it,
+    # a Slack thread and the ticket it is about are connected only by sharing
+    # words — which stops working the moment two projects use the same ones.
+    edges.extend(_cross_references(record, text))
+
     return Extraction(entities=entities, edges=tuple(edges))
 
 
@@ -311,6 +317,14 @@ def extract_jira_issue(record: RawRecord) -> Extraction:
             )
         )
 
+    # Jira's own issue links: the strongest dependency signal in any of these
+    # sources, and the one that makes "what is blocking this" a graph hop.
+    edges.extend(
+        EdgeCandidate(src=src, dst=dst, edge_type=edge_type)
+        for src, dst, edge_type in references.from_jira_links(record.ref, record.payload)
+    )
+    edges.extend(_cross_references(record, fields.get("summary"), fields.get("description")))
+
     return Extraction(entities=entities, edges=tuple(edges))
 
 
@@ -338,6 +352,7 @@ def extract_jira_comment(record: RawRecord) -> Extraction:
         edges.append(
             EdgeCandidate(src=_person_ref(record, str(author)), dst=record.ref, edge_type=AUTHORED)
         )
+    edges.extend(_cross_references(record, body))
     return Extraction(entities=entities, edges=tuple(edges))
 
 
@@ -380,6 +395,29 @@ def extract(record: RawRecord) -> Extraction:
         )
         return Extraction()
     return extractor(record)
+
+
+def _cross_references(
+    record: RawRecord, *texts: object, repo: str | None = None
+) -> list[EdgeCandidate]:
+    """Relationships the text of a record states about other records.
+
+    A message naming a ticket, a pull request saying it fixes an issue. Both
+    are things somebody typed on purpose, so they need no model — P3-RES-1 put
+    a fence around inferred identity and there is no reason to climb it for a
+    fact that was written down.
+
+    Direction comes back with each relation rather than being assumed, because
+    two of the three put the far end in the source position: an issue is
+    *resolved by* the request that fixes it.
+    """
+    prose = "\n".join(str(text) for text in texts if isinstance(text, str) and text)
+    if not prose:
+        return []
+    return [
+        EdgeCandidate(src=src, dst=dst, edge_type=edge_type)
+        for src, dst, edge_type in references.from_text(record.ref, prose, repo=repo)
+    ]
 
 
 def _sort_key_entity(candidate: EntityCandidate) -> tuple[str, str]:

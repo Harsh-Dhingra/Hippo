@@ -172,6 +172,14 @@ SLACK_EDGES = {
     ("U-CAROL", AUTHORED, "C-GENERAL:1750000050.000100"),
     ("U-CAROL", AUTHORED, "C-GENERAL:1750000120.000100"),
     ("C-GENERAL:1750000120.000100", BELONGS_TO, "C-GENERAL"),
+    # Cross-system. Two Slack messages name a Jira ticket, and those edges are
+    # what connect a conversation to the work it is about — including the
+    # injection fixture, because extraction reads what content *says* without
+    # deciding whether it meant it. A hostile message naming ACME-1 becomes
+    # reachable from questions about ACME-1, and is still only visible to
+    # whoever could already read it.
+    ("C-GENERAL:1750000050.000100", "references", "JIRA-123"),
+    ("C-GENERAL:1750000120.000100", "references", "ACME-1"),
 }
 
 
@@ -254,14 +262,52 @@ def test_extraction_makes_no_model_calls_and_needs_no_database() -> None:
     assert extract_all(corpus("jira")).entities
 
 
-def test_every_edge_points_at_something_the_corpus_contains() -> None:
-    """A dangling reference would silently drop the edge at write time."""
+def test_every_within_connector_edge_points_at_something_the_corpus_contains() -> None:
+    """A dangling reference inside one connector would silently drop the edge.
+
+    Cross-connector edges are excluded because dangling is their normal state:
+    a Slack message naming ACME-1 states a relationship whether or not Jira has
+    been synced yet, and resolution drops the edge with a log until it has. The
+    alternative — refusing to extract it — would mean the edge never appeared,
+    since extraction runs per record and cannot know what else exists.
+    """
     for kind in ("slack", "jira"):
         result = extract_all(corpus(kind))
         known = {(e.source.source_type, e.source.source_id) for e in result.entities}
+        namespace = {source_type.split(".")[0] for source_type, _ in known}
+
         for edge in result.edges:
-            assert (edge.src.source_type, edge.src.source_id) in known, edge
-            assert (edge.dst.source_type, edge.dst.source_id) in known, edge
+            for end in (edge.src, edge.dst):
+                if end.source_type.split(".")[0] not in namespace:
+                    continue
+                assert (end.source_type, end.source_id) in known, edge
+
+
+def test_a_cross_connector_reference_is_allowed_to_dangle() -> None:
+    """And is the point: the Slack fixture names two Jira tickets, and those
+    edges are what connect a conversation to the work it is about."""
+    result = extract_all(corpus("slack"))
+
+    outward = [edge for edge in result.edges if edge.dst.source_type.startswith("jira.")]
+
+    assert {edge.dst.source_id for edge in outward} == {"ACME-1", "JIRA-123"}
+    assert all(edge.edge_type == "references" for edge in outward)
+
+
+def test_a_cross_connector_reference_resolves_once_both_sides_are_synced() -> None:
+    """The pay-off. Extracted per record and dangling on its own, the edge
+    lands the moment the other connector's corpus is present — which is what
+    makes a Slack thread and its Jira ticket one graph rather than two."""
+    both = extract_all(corpus("slack") + corpus("jira"))
+    known = {(e.source.source_type, e.source.source_id) for e in both.entities}
+
+    landed = [
+        edge
+        for edge in both.edges
+        if edge.edge_type == "references" and (edge.dst.source_type, edge.dst.source_id) in known
+    ]
+
+    assert [edge.dst.source_id for edge in landed] == ["ACME-1"]
 
 
 def test_every_edge_is_source_provenance_with_full_confidence() -> None:

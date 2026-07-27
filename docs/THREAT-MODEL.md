@@ -344,6 +344,27 @@ facts.
 and unsigned requests, and an isolation test driven by a model that echoes
 every source it is shown.
 
+### 4.13 Claiming a relationship you do not have (A2)
+
+P3-GRF-2 creates graph edges from what content says: a message naming `ACME-1`
+becomes reachable from questions about that ticket. So anyone who can post in a
+channel you read can attach their message to any ticket key they choose.
+
+That is what mentioning is, and it is not a leak. The bound is the one that
+always applies — a message reached this way is still only shown to people who
+could already read it, because every hop of the walk joins `visible_entities`.
+The worst case is that somebody makes their own content more findable, which is
+a nuisance rather than a disclosure.
+
+`MAX_PER_RECORD` caps one record at ten relationships, which is the only
+version of this worth calling abuse: a message claiming a hundred tickets is
+either a bot or somebody deciding they should appear in every answer, and the
+cap handles both without needing to tell them apart.
+
+Nothing here is inferred. Every edge comes from a ticket key somebody typed, a
+Jira link somebody created, or a closing keyword somebody wrote — so the fence
+P3-RES-1 put around model-inferred identity is untouched.
+
 ---
 
 ## 5. What we deliberately do not defend against
