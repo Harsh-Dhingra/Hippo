@@ -170,6 +170,67 @@ they came from the same table state. The floors carry margin for this.
 
 ---
 
+## How big a corpus it holds
+
+`python -m evals.scale` builds a corpus and times each part of a query
+separately, because they fail at different sizes for different reasons and one
+end-to-end number says the query was slow without saying which half to fix.
+
+At **100,000 chunks and 1,089,991 edges** — roughly a mid-size company after a
+year on Slack and Jira — on a laptop, one reader who can see all of it:
+
+| | before P3-GRF-3 | after |
+|---|---|---|
+| permission expansion | 27 ms | 26 ms |
+| keyword only | 570 ms | 560 ms |
+| vector only | 458 ms | 448 ms |
+| graph walk, 1 hop | 4,299 ms | **579 ms** |
+| graph walk, 2 hops | 5,577 ms | **731 ms** |
+| whole query, k=20 hops=1 | 4,606 ms | **877 ms** |
+
+The walk now costs **19 ms** over keyword-only at one hop. It was 3.7 seconds.
+
+### What was wrong, and how the claim got made
+
+Migration 024 said the walk was index-scanned at scale. It was tested with a
+constant `from_id`, which is not the shape the filter uses — against a *set* of
+seeds the planner preferred one hash join over the materialised whole:
+
+```
+->  Append (actual rows=1979982)
+      ->  Seq Scan on edges e    (actual rows=989991)
+      ->  Seq Scan on edges e_1  (actual rows=989991)
+```
+
+Two million rows to find the neighbours of forty seeds. LATERAL fixed that, and
+then the cost moved somewhere new: the visibility check had been pulled *inside*
+the correlated part, rebuilding a 101,200-row hash once per seed — 160 million
+rows scanned to check that a few hundred neighbours were visible. Materialising
+the lateral before joining visibility fixed the rest.
+
+### What is slow now
+
+Keyword and vector, at 560 ms and 448 ms. Both are the same problem and it is
+not the graph: `visible_chunks` builds `candidates` as a CTE of everything the
+reader can see and searches *that*, so the HNSW index is never reachable.
+Measured directly at 40,000 chunks:
+
+```
+as visible_chunks does it:  Seq Scan 40,000 rows -> hash join -> sort   443 ms
+straight at the table:      Index Scan using chunks_embedding_idx      0.34 ms
+```
+
+1,300× and linear in corpus size. pgvector 0.8.5 is installed and supports
+`hnsw.iterative_scan`, which exists for exactly this — index-scan the table,
+apply the permission join after, widen if too few survive. Not done yet, and it
+is the next thing worth doing.
+
+**None of this is a permission risk.** Every path measured here is slow, not
+loose: `visible_chunks()` remains the only gate and the 10,000-case property
+test passes unchanged.
+
+---
+
 ## The number that is not a metric
 
 ```
