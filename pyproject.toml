@@ -56,10 +56,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["core", "api", "sync", "resolver", "agent"]
+# Every package a console script imports, or the script installs and then fails
+# on ImportError — which is worse than not shipping it, because it fails on the
+# user's machine rather than in the build. `surfaces` was missing here for the
+# same reason it was missing from the Dockerfile: a hand-kept list next to an
+# import graph that moved. tests/test_packaging.py now builds the wheel and
+# checks it.
+packages = ["core", "api", "sync", "resolver", "agent", "surfaces"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"core/migrations" = "core/migrations"
+# The .sql files under core/migrations ship because they are inside a package
+# hatchling already collects. There is no force-include: naming a path that is
+# also inside `packages` adds it twice, and hatchling refuses to build at all.
 
 # ---------------------------------------------------------------------------
 # Quality gates. CI runs all of these; see CLAUDE.md. Do not weaken them.

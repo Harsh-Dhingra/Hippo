@@ -17,11 +17,15 @@ rather than of a function, and that no unit test would notice going wrong.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "deploy" / "Dockerfile"
@@ -100,6 +104,55 @@ def test_every_console_script_resolves() -> None:
         module_name, _, attribute = target.partition(":")
         module = importlib.import_module(module_name)
         assert callable(getattr(module, attribute)), f"{name} -> {target}"
+
+
+def test_the_wheel_builds_and_carries_what_its_scripts_import() -> None:
+    """The artifact anybody installing Hippo actually gets.
+
+    Every test above this one runs against the source tree, where `surfaces` is
+    importable because it is a directory in the working directory. That says
+    nothing about the wheel, and the wheel was broken in two ways at once:
+    `surfaces` was not in `packages`, so `hippo-mcp` would install as a command
+    and fail on ImportError the first time a coding agent invoked it; and
+    force-including `core/migrations` — already inside the `core` package —
+    added those files twice, so hatchling refused to build at all.
+
+    The second bug hid the first. Nothing in the repository built a wheel, so
+    neither surfaced, and both would have been discovered by the first person
+    to try to install it.
+    """
+    import zipfile
+
+    manifest = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    scripts: dict[str, str] = manifest["project"]["scripts"]
+
+    with tempfile.TemporaryDirectory() as out:
+        build = subprocess.run(
+            [sys.executable, "-m", "hatchling", "build", "-t", "wheel"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "HATCH_BUILD_LOCATION": out},
+        )
+        if build.returncode != 0 and "No module named hatchling" in build.stderr:
+            pytest.skip("hatchling is not installed in this environment")
+        assert build.returncode == 0, f"the wheel does not build:\n{build.stderr}"
+
+        wheels = sorted(Path(out).glob("*.whl"))
+        assert wheels, f"no wheel produced:\n{build.stdout}"
+        shipped = set(zipfile.ZipFile(wheels[-1]).namelist())
+
+    # Every module a console script names has to be in there, or the script is
+    # a command that exists and cannot run.
+    for name, target in scripts.items():
+        module = target.partition(":")[0].replace(".", "/")
+        assert f"{module}.py" in shipped or f"{module}/__init__.py" in shipped, (
+            f"the wheel installs `{name}` but does not contain {target}"
+        )
+
+    # And the migrations, because `hippo-migrate` with nothing to apply is a
+    # command that succeeds against an empty database.
+    assert sum(1 for n in shipped if n.startswith("core/migrations/") and n.endswith(".sql")) >= 2
 
 
 def test_every_connector_entry_point_resolves() -> None:
