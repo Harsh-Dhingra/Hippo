@@ -55,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent.retrieval import plan_query, retrieve
 from core.db import Connection, connect
 from core.migrate import upgrade
+from evals.scratch import scratch_database
 from resolver.embeddings import EmbeddingProvider, HashingEmbeddings
 
 LOG = logging.getLogger("hippo.evals.external")
@@ -314,7 +315,9 @@ def main(argv: list[str]) -> int:
         return 2
 
     benchmark = Benchmark.load(Path(argv[0]))
-    target = argv[1] if len(argv) > 1 else f"postgresql:///hippo_bench_{uuid.uuid4().hex[:8]}"
+    # scratch_database also *creates* it. The old default named a database
+    # that had never been made, so the no-argument path could not work.
+    target = argv[1] if len(argv) > 1 else scratch_database("hippo_bench")
 
     with connect(target, autocommit=True) as conn:
         upgrade(conn)

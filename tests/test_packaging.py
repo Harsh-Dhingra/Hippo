@@ -106,6 +106,46 @@ def test_every_console_script_resolves() -> None:
         assert callable(getattr(module, attribute)), f"{name} -> {target}"
 
 
+def test_no_module_hardcodes_a_database_address() -> None:
+    """A DSN written into the source works exactly where it was written.
+
+    Three eval CLIs each had `postgresql://localhost:5432/postgres` in them.
+    That is a valid address on a developer machine, where local connections are
+    trusted, and it fails anywhere a password is required — which CI found on
+    the first run it ever performed. The tests covering those CLIs passed
+    locally for the same reason the bug was invisible locally, so no amount of
+    test coverage on them would have caught it. This checks the shape instead.
+    """
+    offenders: list[str] = []
+    for package in sorted(FIRST_PARTY):
+        for path in (ROOT / package).rglob("*.py"):
+            # Two legitimate homes for a default. core/config.py's is the
+            # settings default every deployment overrides by environment;
+            # evals/scratch.py's is reached only when nothing is set.
+            if path.name == "scratch.py" or path.relative_to(ROOT).as_posix() == "core/config.py":
+                continue
+            for number, line in enumerate(path.read_text().splitlines(), start=1):
+                if re.search(r"postgres(ql)?://[^\"'\s]*\d", line) and "example" not in line:
+                    offenders.append(f"{path.relative_to(ROOT)}:{number}")
+
+    assert offenders == [], (
+        "hardcoded database address in " + ", ".join(offenders) + "; use evals.scratch.admin_dsn()"
+    )
+
+
+def test_the_ui_container_binds_to_every_interface() -> None:
+    """Next's standalone server binds to `process.env.HOSTNAME`, and Docker
+    sets that to the container id. Without an explicit value the server comes
+    up on `http://<container-id>:3000`, its own healthcheck's request to
+    127.0.0.1 is refused, and the log still says "Ready" — so compose reports
+    the container unhealthy with nothing in the logs to explain it."""
+    dockerfile = (ROOT / "deploy" / "Dockerfile.ui").read_text()
+
+    assert re.search(r"^\s*HOSTNAME=0\.0\.0\.0", dockerfile, re.MULTILINE), (
+        "deploy/Dockerfile.ui must set HOSTNAME=0.0.0.0"
+    )
+
+
 def test_the_wheel_builds_and_carries_what_its_scripts_import() -> None:
     """The artifact anybody installing Hippo actually gets.
 

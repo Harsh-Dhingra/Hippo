@@ -16,12 +16,14 @@ chunks; measuring on it gave recall@20 = 1.000 and meant nothing.
 from __future__ import annotations
 
 import sys
-import uuid
+
+from psycopg.conninfo import conninfo_to_dict
 
 from core.db import connect
 from core.migrate import upgrade
 from evals.harness import cases_from, run
 from evals.redteam import hunt, probe_count
+from evals.scratch import scratch_database
 from evals.seed import build, fingerprint
 
 
@@ -68,14 +70,9 @@ def main(dsn: str | None) -> int:
 
 
 def _scratch() -> str:
-    """A throwaway database, left behind on purpose: a run whose numbers looked
-    wrong is a run somebody will want to poke at afterwards."""
-    admin = "postgresql://localhost:5432/postgres"
-    name = f"hippo_evals_{uuid.uuid4().hex[:8]}"
-    with connect(admin, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
-    print(f"(built {name}; drop it when you are done)\n")
-    return f"postgresql://localhost:5432/{name}"
+    dsn = scratch_database("hippo_evals")
+    print(f"(built {conninfo_to_dict(dsn)['dbname']}; drop it when you are done)\n")
+    return dsn
 
 
 if __name__ == "__main__":

@@ -470,18 +470,29 @@ def test_the_report_cli_runs_and_says_zero_leaks(
 
 def test_the_cli_can_make_its_own_database() -> None:
     """The no-argument path, so a first-time reader gets numbers without
-    setting anything up first."""
+    setting anything up first.
+
+    What is asserted is that the DSN connects, not that it is spelled a
+    particular way. The first version of this checked `startswith("postgresql://")`
+    and pulled the database name out with `rsplit("/", 1)`, which only held
+    because the address it was checking was a hardcoded URL — the same
+    hardcoding that made the CLI unusable against any Postgres wanting a
+    password. libpq's keyword form is equally valid and carries the credential,
+    so the test now asks psycopg what the name is instead of the string.
+    """
+    from psycopg.conninfo import conninfo_to_dict
+
     from evals.report import _scratch
+    from evals.scratch import admin_dsn
 
     dsn = _scratch()
     try:
-        assert dsn.startswith("postgresql://")
         with connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
     finally:
-        name = dsn.rsplit("/", 1)[1]
-        with connect("postgresql://localhost:5432/postgres", autocommit=True) as conn:
+        name = conninfo_to_dict(dsn)["dbname"]
+        with connect(admin_dsn(), autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 

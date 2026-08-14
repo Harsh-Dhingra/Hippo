@@ -34,8 +34,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from psycopg.conninfo import conninfo_to_dict
+
 from core.db import Connection, connect
 from core.migrate import upgrade
+from evals.scratch import scratch_database
 
 ORG_SCOPE = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -338,12 +341,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dsn", default=None)
     args = parser.parse_args(argv)
 
-    target = args.dsn or f"postgresql:///hippo_scale_{uuid.uuid4().hex[:8]}"
-    if args.dsn is None:
-        import subprocess
-
-        subprocess.run(["createdb", target.rsplit("/", 1)[-1]], check=True)
-        print(f"(built {target.rsplit('/', 1)[-1]}; drop it when you are done)\n")
+    target = args.dsn
+    if target is None:
+        # Not `createdb`: that is a binary which may not be installed, and it
+        # takes no credentials, so the no-argument path only ever worked on a
+        # machine with a trusted local socket.
+        target = scratch_database("hippo_scale")
+        print(f"(built {conninfo_to_dict(target)['dbname']}; drop it when you are done)\n")
 
     with connect(target, autocommit=True) as conn:
         upgrade(conn)

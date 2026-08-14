@@ -25,13 +25,14 @@ from __future__ import annotations
 
 import sys
 import time
-import uuid
 
+from psycopg.conninfo import conninfo_to_dict
 from pydantic import BaseModel, ConfigDict
 
 from core.db import connect
 from core.migrate import upgrade
 from evals.harness import cases_from, run
+from evals.scratch import admin_dsn, scratch_database
 from evals.seed import build
 from resolver.embeddings import (
     EmbeddingProvider,
@@ -111,11 +112,7 @@ def measure(candidate: Candidate, k: int = 20) -> Measurement:
     under test and re-embedding in place would leave the question of whether
     anything else moved.
     """
-    admin = "postgresql://localhost:5432/postgres"
-    name = f"hippo_embed_{uuid.uuid4().hex[:8]}"
-    with connect(admin, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
-    dsn = f"postgresql://localhost:5432/{name}"
+    dsn = scratch_database("hippo_embed")
 
     try:
         with connect(dsn, autocommit=True) as conn:
@@ -139,8 +136,12 @@ def measure(candidate: Candidate, k: int = 20) -> Measurement:
             embed_seconds=elapsed,
         )
     finally:
-        with connect(admin, autocommit=True) as conn:
-            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        # Unlike the other two, this one cleans up after itself: it builds a
+        # database per candidate, so leaving them behind means a pile of them.
+        with connect(admin_dsn(), autocommit=True) as conn:
+            conn.execute(
+                f'DROP DATABASE IF EXISTS "{conninfo_to_dict(dsn)["dbname"]}" WITH (FORCE)'
+            )
 
 
 def main(only: str | None = None) -> int:

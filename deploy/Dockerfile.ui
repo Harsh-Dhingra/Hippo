@@ -23,8 +23,15 @@ RUN npm run build
 FROM node:22-bookworm-slim
 
 WORKDIR /app
+# HOSTNAME is not cosmetic here. Next's standalone server binds to
+# `process.env.HOSTNAME`, and Docker sets that to the container id — so the
+# server came up on `http://<container-id>:3000` and nothing else, and the
+# healthcheck's request to 127.0.0.1 was refused while the log said
+# "Ready in 78ms". Binding to all interfaces is what makes the container
+# reachable both from its own healthcheck and from the published port.
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
     PORT=3000
 
 # `output: "standalone"` produces a server with only the modules it uses, which

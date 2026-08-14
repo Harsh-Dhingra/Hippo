@@ -33,7 +33,6 @@ CI.
 from __future__ import annotations
 
 import sys
-import uuid
 from typing import Any
 
 from agent.links import load_directory
@@ -42,6 +41,7 @@ from agent.providers import build_provider
 from core.config import Settings, get_settings
 from core.db import Connection, connect
 from core.migrate import upgrade
+from evals.scratch import scratch_database
 from resolver.embeddings import HashingEmbeddings
 
 PRIVATE = "Acme is asking for 30 percent off to renew, do not repeat outside this channel"
@@ -206,11 +206,7 @@ def estimate() -> None:
 
 
 def _scratch() -> str:
-    admin = "postgresql://localhost:5432/postgres"
-    name = f"hippo_live_{uuid.uuid4().hex[:8]}"
-    with connect(admin, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
-    dsn = f"postgresql://localhost:5432/{name}"
+    dsn = scratch_database("hippo_live")
     with connect(dsn, autocommit=True) as conn:
         upgrade(conn)
     return dsn
