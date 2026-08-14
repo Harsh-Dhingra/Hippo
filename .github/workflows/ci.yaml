@@ -130,6 +130,16 @@ jobs:
       # The whole of ARCHITECTURE section 12, driven the way a mouse would:
       # sign in, approve a proposal, execute it, roll it back, read the trace.
       - name: the demo is drivable
+        env:
+          # The agent proposes and the sync worker executes, so approving a
+          # proposal in the UI leaves it approved and nothing more. Without
+          # this the smoke test asked whether it had executed twenty-two
+          # milliseconds after approving it, which no worker could satisfy —
+          # so the executed and rolled-back checks had never once run, and
+          # deploy/demo/execute.py existed without being called by anything.
+          HIPPO_DEMO_EXECUTOR: >-
+            docker compose -f deploy/compose.yaml exec -T app
+            sh -c 'python -m deploy.demo.execute "$HIPPO_DATABASE_URL"'
         run: |
           docker compose -f deploy/compose.yaml exec -T app \
             sh -c 'python -m deploy.demo.seed "$HIPPO_DATABASE_URL"'
